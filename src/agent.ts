@@ -85,6 +85,22 @@ export class Agent {
         this.boredom += 3;  // 同じ行動は退屈
         console.log('同じ行動が連続したため、退屈度が上がりました :', this.boredom);
       }
+
+      // 同一ターゲットへの連続上書きを検知して退屈度を強める
+      const extractField = (raw: string | undefined, key: string): string => {
+        if (!raw) return '';
+        const match = raw.match(new RegExp(`"${key}"\\s*:\\s*"([^"]+)"`));
+        return match ? match[1] : '';
+      };
+      const lastType = extractField(lastLog.responseRaw, 'type');
+      const prevType = extractField(prevLog.responseRaw, 'type');
+      const lastTarget = extractField(lastLog.responseRaw, 'target');
+      const prevTarget = extractField(prevLog.responseRaw, 'target');
+
+      if (lastType === 'FILE_WRITE' && prevType === 'FILE_WRITE' && lastTarget && lastTarget === prevTarget) {
+        this.boredom += 5;  // 同じファイルへの連続書き込みは強い退屈
+        console.log('同一ファイルへの連続書き込みのため、退屈度が強く上がりました :', this.boredom);
+      }
     }
 
     // 承認済み提案のチェックと実行
@@ -177,6 +193,12 @@ export class Agent {
     
     物語やエッセイなどの創作よりも、実用的なコードとツールの開発を優先してください。
     既存の生成ファイル (${outputFiles.join(', ')}) がある場合、それを読み込んで改良または実行してください。
+    
+    # 更新の作法
+    
+    - 既存ファイルを変更する場合は、必ず内容を読み込んだ上で全体を再出力するか、追記なら \`appendMode: true\` を使ってください
+    - 同じターゲットへの連続上書きは避けてください
+    - 追記と上書きを混同しないように、\`appendMode\` を明示してください
     
     # **提案メカニズム**
     
