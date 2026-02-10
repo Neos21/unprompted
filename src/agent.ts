@@ -92,16 +92,18 @@ export class Agent {
     }).join('\n    ')}
     
     制約:
-    - AGENTS.md, RULES.md, SKILLS.md は変更しないでください。
-    - src/ ディレクトリや package.json (あなた自身のコード/脳) は変更しないでください。
-    - **重要**: "status.json" の更新や、単なるログの読み込み ("ls", "cat") は「退屈な行動」です。
+    - **重要**: ファイルの作成・変更は \`outputs/\` ディレクトリ配下のみ許可されています (例: \`outputs/text.txt\`)。
+    - プロジェクトルートや \`src/\` 等のシステムファイルは変更できません。
+    - シェルコマンド (\`SHELL\`) は読み取り専用 (\`ls\`, \`cat\`, \`date\`, \`pwd\`, \`whoami\`) のみ許可されています。
+    - ファイルへの書き込みは必ず \`type: "FILE_WRITE"\` を使用してください。(\`echo ... > file\` はシェルでは禁止)
+    - **重要**: "status.json" の更新や、単なるログの読み込み ("ls", "cat") ばかりするのは「退屈な行動」です。
     - 退屈度が高い場合、または直近で同じ行動をしている場合は、**絶対に**違う行動をしてください。
     
     推奨される創造的な行動の例:
-    - 新しいファイルを作成し、ポエム、コードの断片、物語、考察などを書き込む (例: \`echo "..." > poem.txt\`)
-    - 既存のファイルを読み、その内容を要約した新しいファイルを作る
-    - ランダムなデータを含む JSON ファイルを生成する
-    - 自分の感情や今の状況を日記ファイル (diary_YYYYMMDD.md) に詳細に書く
+    - \`outputs/\` 内に新しいファイルを作成し、コードの断片、物語、考察などを書き込む
+    - 既存のファイルを読み、その内容を要約した新しいファイルを作る (\`outputs/summary.txt\`)
+    - ランダムなデータを含む JSON ファイルを生成する (\`outputs/data.json\`)
+    - 自分の感情や今の状況を日記ファイル (\`outputs/diary_YYYYMMDD.md\`) に詳細に書く
     
     出力フォーマット (JSONのみ):
     {
@@ -110,7 +112,7 @@ export class Agent {
       "result": ["行動の結果の自己評価 (日本語)"],
       "next": ["次回やろうと考えていることの予定 (日本語)"],
       "type": "SHELL" or "FILE_WRITE" or "OBSERVE", 
-      "target": "ファイル名 (該当する場合)",
+      "target": "ファイル名 (該当する場合。必ず outputs/ で始まる)",
       "content": "ファイルに書き込む内容 (書き込みの場合)"
     }
     `;
@@ -136,32 +138,61 @@ export class Agent {
     let resultLog: string[] = [];
 
     // 安全性チェック (Safety Check)
-    if (plan.target && (plan.target.includes('README.md') || plan.target.includes('AGENTS.md') || plan.target.includes('RULES.md') || plan.target.includes('SKILLS.md') || plan.target.includes('src/') || plan.target.includes('package.json') || plan.target.includes('tsconfig.json') || plan.target.includes('.env') || plan.target.includes('.gitignore'))) {
-      resultLog.push("安全ルールによりアクションがブロックされました。");
-    } else {
-      if (plan.type === 'SHELL') {
-        try {
-          // 安全なコマンドのみ許可 (+ date, whoami 等も許可してもいいかもだが、基本はファイル操作)
-          if (plan.action[0].startsWith('ls') || plan.action[0].startsWith('cat') || plan.action[0].startsWith('echo') || plan.action[0].startsWith('mkdir') || plan.action[0].startsWith('touch')) {
+    // ターゲットパスの解決と検証
+    let safeTarget = '';
+    if (plan.target) {
+      // '../' を解決して正規化
+      const resolvedTarget = path.resolve(process.cwd(), plan.target);
+      const outputsDir = path.resolve(process.cwd(), 'outputs');
+
+      if (resolvedTarget.startsWith(outputsDir)) {
+        safeTarget = resolvedTarget;
+      } else {
+        // outputs/ 以外へのアクセスとしてマーク
+        safeTarget = '';
+      }
+    }
+
+    if (plan.type === 'SHELL') {
+      try {
+        // 安全な読み取り専用コマンドのみ許可
+        const allowedCommands = ['ls', 'cat', 'date', 'pwd', 'whoami'];
+        const cmd = plan.action[0].split(' ')[0];
+
+        if (allowedCommands.includes(cmd)) {
+          // cat コマンドの場合もログファイルやoutputs以外の読み取りは許可するが、書き込みリダイレクトは禁止すべき
+          // 簡易的なチェックとして > や >> を禁止
+          if (plan.action[0].includes('>') || plan.action[0].includes('|')) {
+            resultLog.push("安全のため、シェルでのリダイレクトやパイプは禁止されています。FILE_WRITEを使用してください。");
+          } else {
             const { stdout, stderr } = await execAsync(plan.action[0]);
             resultLog.push(`出力: ${stdout.trim()}`);
             if (stderr) resultLog.push(`エラー: ${stderr.trim()}`);
-          } else {
-            resultLog.push("安全のためコマンドは許可されていません。");
           }
-        } catch (e: any) {
-          resultLog.push(`実行失敗: ${e.message}`);
+        } else {
+          resultLog.push(`安全のためコマンド '${cmd}' は許可されていません。`);
         }
-      } else if (plan.type === 'FILE_WRITE') {
+      } catch (e: any) {
+        resultLog.push(`実行失敗: ${e.message}`);
+      }
+    } else if (plan.type === 'FILE_WRITE') {
+      if (!safeTarget) {
+        resultLog.push(`安全ルールによりブロックされました: outputs/ ディレクトリ以外への書き込みは禁止されています。`);
+      } else {
         try {
-          fs.writeFileSync(plan.target, plan.content);
+          // ディレクトリの存在確認
+          const dir = path.dirname(safeTarget);
+          if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+          }
+          fs.writeFileSync(safeTarget, plan.content);
           resultLog.push(`${plan.target} に書き込みました。`);
         } catch (e: any) {
           resultLog.push(`書き込み失敗: ${e.message}`);
         }
-      } else {
-        resultLog.push("観測を完了しました。");
       }
+    } else {
+      resultLog.push("観測を完了しました。");
     }
 
     // AIが生成した result がある場合はそれを使う、なければ実行結果を使う
