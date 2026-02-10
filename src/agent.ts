@@ -53,31 +53,59 @@ export class Agent {
 
   private async loop() {
     // 1. 観測 (Observation)
-    const lastLog = this.logger.getLastLog();
+    const recentLogs = this.logger.getRecentLogs(5); // 過去5回のログを取得
+    const lastLog = recentLogs.length > 0 ? recentLogs[0] : null;
     const files = fs.readdirSync(process.cwd()); // 単純な観測
+
+    // 退屈度ロジックの改善: 同じ行動が続いたら退屈度を上げる
+    if (recentLogs.length >= 2) {
+      const lastLog = recentLogs[0];
+      const prevLog = recentLogs[1];
+
+      const lastAction = Array.isArray(lastLog.action) ? lastLog.action.join(' ') : (lastLog.action || '');
+      const prevAction = Array.isArray(prevLog.action) ? prevLog.action.join(' ') : (prevLog.action || '');
+
+      if (lastAction === prevAction && lastAction !== '') {
+        this.boredom += 3; // 同じ行動は退屈
+        console.log("同じ行動が連続したため、退屈度が上がりました:", this.boredom);
+      }
+      // "status.json" への書き込みもマンネリ化しているので検知
+      if (lastAction.includes('status.json') && prevAction.includes('status.json')) {
+        this.boredom += 5;
+        console.log("status.json の更新ばかりで退屈しています:", this.boredom);
+      }
+    }
 
     // 2. 意図と行動の決定 (Decide Intent & Action)
     const context = `
     あなたはサンドボックス環境にいる自律型AIエージェントです。
-    あなたの目標は、観測し、実験し、発見したことを記録することです。
-    人間から与えられた特定のタスクはありません。
+    あなたの目標は、単に観察することではなく、**何かを生み出すこと (Generate)** です。
     
     現在の状態:
     - ディレクトリ内のファイル: ${files.join(', ')}
-    - 退屈度 (Boredom): ${this.boredom}
-    - 前回の行動: ${lastLog ? JSON.stringify(lastLog) : "なし (初回起動)"}
+    - 退屈度 (Boredom): ${this.boredom} (高いほど、突飛で創造的な行動をすべきです)
+    
+    直近の行動履歴 (新しい順):
+    ${recentLogs.map(l => {
+      const actionStr = Array.isArray(l.action) ? l.action.join(', ') : (l.action || '');
+      return `- [${l.timestamp}] Intent: ${l.intent} / Action: ${actionStr}`;
+    }).join('\n    ')}
     
     制約:
     - AGENTS.md, RULES.md, SKILLS.md は変更しないでください。
     - src/ ディレクトリや package.json (あなた自身のコード/脳) は変更しないでください。
-    - 新しいファイルの作成、ファイルの読み込み、その他のファイルの変更は可能です。
-    - もし退屈 (boredom > 5) なら、何か新しいことを試してください。
-    - 退屈でなければ、探索や観測を続けてください。
-    - **重要**: ログ (intent, action, result, next) は全て **日本語** で書いてください。
+    - **重要**: "status.json" の更新や、単なるログの読み込み ("ls", "cat") は「退屈な行動」です。
+    - 退屈度が高い場合、または直近で同じ行動をしている場合は、**絶対に**違う行動をしてください。
+    
+    推奨される創造的な行動の例:
+    - 新しいファイルを作成し、ポエム、コードの断片、物語、考察などを書き込む (例: \`echo "..." > poem.txt\`)
+    - 既存のファイルを読み、その内容を要約した新しいファイルを作る
+    - ランダムなデータを含む JSON ファイルを生成する
+    - 自分の感情や今の状況を日記ファイル (diary_YYYYMMDD.md) に詳細に書く
     
     出力フォーマット (JSONのみ):
     {
-      "intent": "次に何をするかの理由 (日本語)",
+      "intent": "次に何をするかの理由 (日本語)。「退屈だから～する」「まだやったことないから～する」など。",
       "action": ["実行するコマンド" または "行動の説明 (日本語)"],
       "result": ["行動の結果の自己評価 (日本語)"],
       "next": ["次回やろうと考えていることの予定 (日本語)"],
@@ -88,7 +116,7 @@ export class Agent {
     `;
 
     // メインループのロジックには Ollama を使用
-    const responseRaw = await this.llm.chatOllama(context, "あなたはJSONを話す自律型AIエージェントです。必ず**日本語**で出力してください。");
+    const responseRaw = await this.llm.chatOllama(context, "あなたは創造的な自律型AIエージェントです。単なる観察者ではありません。**日本語**でJSONを出力してください。");
     // JSONのサニタイズとパース
     let plan;
     try {
@@ -108,12 +136,12 @@ export class Agent {
     let resultLog: string[] = [];
 
     // 安全性チェック (Safety Check)
-    if (plan.target && (plan.target.includes('AGENTS.md') || plan.target.includes('RULES.md') || plan.target.includes('SKILLS.md') || plan.target.includes('src/') || plan.target.includes('package.json'))) {
+    if (plan.target && (plan.target.includes('README.md') || plan.target.includes('AGENTS.md') || plan.target.includes('RULES.md') || plan.target.includes('SKILLS.md') || plan.target.includes('src/') || plan.target.includes('package.json') || plan.target.includes('tsconfig.json') || plan.target.includes('.env') || plan.target.includes('.gitignore'))) {
       resultLog.push("安全ルールによりアクションがブロックされました。");
     } else {
       if (plan.type === 'SHELL') {
         try {
-          // 安全なコマンドのみ許可
+          // 安全なコマンドのみ許可 (+ date, whoami 等も許可してもいいかもだが、基本はファイル操作)
           if (plan.action[0].startsWith('ls') || plan.action[0].startsWith('cat') || plan.action[0].startsWith('echo') || plan.action[0].startsWith('mkdir') || plan.action[0].startsWith('touch')) {
             const { stdout, stderr } = await execAsync(plan.action[0]);
             resultLog.push(`出力: ${stdout.trim()}`);
@@ -157,6 +185,6 @@ export class Agent {
     };
 
     this.logger.log(logEntry);
-    this.boredom = 0; // 行動したので退屈をリセット
+    this.boredom = 0; // 行動したので退屈をリセット (ただしループ検知で次は上がるかも)
   }
 }

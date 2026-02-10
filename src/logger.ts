@@ -48,16 +48,26 @@ export class Logger {
   }
 
   getLastLog(): ActionLog | null {
-    const files = fs.readdirSync(this.logDir).sort().reverse();
-    if (files.length === 0) return null;
+    const logs = this.getRecentLogs(1);
+    return logs.length > 0 ? logs[0] : null;
+  }
 
-    const lastFile = files[0];
-    const content = fs.readFileSync(path.join(this.logDir, lastFile), 'utf8');
-    try {
-      return yaml.parse(content) as ActionLog;
-    } catch (e) {
-      console.error("最後のログのパースに失敗しました:", e);
-      return null;
+  getRecentLogs(limit: number): ActionLog[] {
+    const files = fs.readdirSync(this.logDir).sort().reverse();
+    if (files.length === 0) return [];
+
+    const recentFiles = files.slice(0, limit);
+    const logs: ActionLog[] = [];
+
+    for (const file of recentFiles) {
+      try {
+        const content = fs.readFileSync(path.join(this.logDir, file), 'utf8');
+        const log = yaml.parse(content) as ActionLog;
+        if (log) logs.push(log);
+      } catch (e) {
+        console.error(`ログファイル ${file} のパースに失敗しました:`, e);
+      }
     }
+    return logs;
   }
 }
