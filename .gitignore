@@ -1,5 +1,8 @@
 .DS_Store
 Thumbs.db
 
+.env
+
 .qodo/
+dist/
 node_modules/
