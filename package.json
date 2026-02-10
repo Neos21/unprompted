@@ -1,14 +1,28 @@
 {
   "name": "unprompted",
+  "description": "「明確な目的やゴールを与えられなくても動き続ける AI エージェント」を研究・開発するための実験用リポジトリ",
   "private": true,
   "type": "module",
-  "description": "「明確な目的やゴールを与えられなくても動き続ける AI エージェント」を研究・開発するための実験用リポジトリ",
   "scripts": {
-    "start": "tsx src/main.ts",
+    "start": "tsx ./src/main.ts",
     "clear-logs": "find ./logs -maxdepth 1 -not -name '.gitkeep' -not -wholename './logs' -delete",
     "clear-outputs": "find ./outputs -maxdepth 1 -not -name '.gitkeep' -not -wholename './outputs' -delete",
     "clear-proposals": "find ./proposals -maxdepth 1 -not -name '.gitkeep' -not -wholename './proposals' -delete",
     "clear-files": "npm run clear-logs && npm run clear-outputs && npm run clear-proposals"
+  },
+  "author": "Neo <neos21@gmail.com> (https://neos21.net/)",
+  "license": "MIT",
+  "homepage": "https://github.com/Neos21/unprompted#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Neos21/unprompted.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Neos21/unprompted/issues"
+  },
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/Neos21"
   },
   "dependencies": {
     "ollama": "0.6.3",

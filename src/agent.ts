@@ -1,4 +1,3 @@
-
 import { LLMClient } from './llm.js';
 import { Logger } from './logger.js';
 import { ActionLog, Proposal } from './types.js';
