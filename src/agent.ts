@@ -205,6 +205,7 @@ export class Agent {
     - コード実行はこのシステムでは禁止。実行したい場合は PROPOSAL を出す
     - action は日本語の作業概要を1行で書く (英単語・システム語は禁止)
     - 観測は SHELL で行う (OBSERVE は使わない)
+    - 同じファイルの繰り返し読み取りは避け、読んだら次は別の作業に進む
     
     # 目標
     
@@ -220,30 +221,59 @@ export class Agent {
     
     - JSON 以外は出力しない
     - コードブロックや説明文は禁止
-    - 使わないフィールドは省略してよい
+    - 必須フィールド : intent, action, next, type
+    - type ごとの必須 :
+      - SHELL : command
+      - FILE_WRITE : target, content
+      - PROPOSAL : proposal (type/title/reasoning/details/risks/benefits)
     
     出力は次の JSON 形式に従うこと。
-    
-    {
-      "intent": "次に何をするかの理由",
-      "action": "行動の概要を日本語1行で記述",
-      "result": ["行動の結果の自己評価"],
-      "next": ["次回やろうと考えていることの予定"],
-      "type": "SHELL",
-      "command": "ls -la"
-    }
+
+{
+  "intent": "次に何をするかの理由",
+  "action": "行動の概要を日本語1行で記述",
+  "next": ["次回やろうと考えていることの予定"],
+  "type": "SHELL",
+  "command": "ls -la"
+}
     `;
 
     const systemPrompt = 'あなたはコード生成に特化した AI エージェントです。実用的なコードを生成し、実行して自己を発展させてください。物語やエッセイではなく、プログラムとツールを作成してください。**日本語** で JSON を出力してください。';
 
     const parsePlan = (raw: string): any => {
-      const cleanRaw = raw.replace(/```json/g, '').replace(/```/g, '').trim();
-      const jsonMatch = cleanRaw.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        throw new Error('JSON が見つかりませんでした');
+      let trimmed = raw.trim();
+      if (trimmed.startsWith('```json') && trimmed.endsWith('```')) {
+        trimmed = trimmed.replace(/^```json\s*/m, '').replace(/```$/m, '').trim();
+      } else if (trimmed.includes('```')) {
+        throw new Error('コードブロックは禁止です');
       }
-      // まず JSON として厳格にパースする
-      return JSON.parse(jsonMatch[0]);
+      if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
+        throw new Error('JSON 以外の文字が含まれています');
+      }
+      return JSON.parse(trimmed);
+    };
+
+    const normalizeCommand = (rawCommand: string): string => {
+      const tokens = rawCommand.trim().split(/\s+/).filter(Boolean);
+      if (tokens.length === 0) return '';
+      const cmd = tokens[0];
+      let args = tokens.slice(1);
+      if (cmd === 'ls') {
+        args = args.filter(t => !t.startsWith('-'));
+      }
+      const normArgs = args.map(arg => {
+        let a = arg.replace(/^['"]|['"]$/g, '');
+        while (a.startsWith('./')) a = a.slice(2);
+        if (a.endsWith('/')) a = a.slice(0, -1);
+        return a;
+      });
+      return `${cmd} ${normArgs.join(' ')}`.trim();
+    };
+
+    const extractCommandFromRaw = (raw: string | undefined): string | null => {
+      if (!raw) return null;
+      const match = raw.match(/"command"\s*:\s*"([^"]+)"/);
+      return match ? match[1] : null;
     };
 
     const responseRaw = await this.llm.chatOllama(context, systemPrompt);
@@ -253,6 +283,7 @@ export class Agent {
       plan = parsePlan(responseRaw);
     } catch (error: any) {
       console.error('LLM レスポンスのパースに失敗しました', error);
+      let repairedRaw: string | null = null;
       try {
         const strictPrompt = `
 以下の出力は JSON ではありません。**厳密な JSON のみ** を出力してください。
@@ -277,7 +308,7 @@ export class Agent {
 
 ${responseRaw}
         `.trim();
-        const repairedRaw = await this.llm.chatOllama(strictPrompt, systemPrompt);
+        repairedRaw = await this.llm.chatOllama(strictPrompt, systemPrompt);
         plan = parsePlan(repairedRaw);
       } catch (repairError: any) {
         // パース失敗をログに記録
@@ -285,7 +316,11 @@ ${responseRaw}
           timestamp: '',
           intent: 'LLMレスポンスのパース失敗',
           action: 'LLM Response Parsing',
-          result: [`エラー : ${repairError.message}`, `Raw Response : ${responseRaw}`],
+          result: [
+            `エラー : ${repairError.message}`,
+            `Raw Response : ${responseRaw}`,
+            repairedRaw ? `Repaired Raw : ${repairedRaw}` : 'Repaired Raw : (なし)'
+          ],
           next: ['再試行'],
           responseRaw
         };
@@ -304,18 +339,56 @@ ${responseRaw}
       if (!candidate.type || !allowedTypes.has(candidate.type)) {
         errors.push(`type が不正です: ${candidate.type}`);
       }
-      if (candidate.type === 'FILE_READ') {
-        errors.push('FILE_READ は無効です (SHELL の cat を使ってください)');
+      if (!candidate.intent || typeof candidate.intent !== 'string') {
+        errors.push('intent が文字列ではありません');
       }
-      const actionText = Array.isArray(candidate.action) ? candidate.action.join(' / ') : candidate.action;
-      if (!actionText || typeof actionText !== 'string') {
+      if (!candidate.action || typeof candidate.action !== 'string') {
         errors.push('action が文字列ではありません');
       }
+      if (!candidate.next || !Array.isArray(candidate.next)) {
+        errors.push('next は配列である必要があります');
+      }
+
+      if (candidate.type === 'FILE_WRITE') {
+        if (!candidate.target || typeof candidate.target !== 'string') {
+          errors.push('FILE_WRITE の target がありません');
+        } else {
+          const resolvedTarget = path.resolve(process.cwd(), candidate.target);
+          const outputsDir = path.resolve(process.cwd(), 'outputs');
+          if (!resolvedTarget.startsWith(outputsDir)) {
+            errors.push('FILE_WRITE の target が outputs/ 配下ではありません');
+          }
+        }
+        if (typeof candidate.content !== 'string') {
+          errors.push('FILE_WRITE の content がありません');
+        }
+        if (candidate.command) {
+          errors.push('FILE_WRITE に command は使用できません');
+        }
+      }
+
       if (candidate.type === 'SHELL') {
         const rawCommand = candidate.command || (Array.isArray(candidate.action) ? candidate.action[0] : candidate.action);
+        if (!rawCommand || typeof rawCommand !== 'string') {
+          errors.push('SHELL の command がありません');
+        }
         const cmd = (rawCommand || '').split(' ')[0];
         if (!allowedShellCommands.includes(cmd)) {
           errors.push(`SHELL の command が許可コマンドではありません : ${cmd}`);
+        }
+        if ((rawCommand || '').includes('>') || (rawCommand || '').includes('|')) {
+          errors.push('SHELL の command にリダイレクト/パイプは使えません');
+        }
+        if (rawCommand) {
+          const normalized = normalizeCommand(rawCommand);
+          const recentSame = recentLogs.filter(log => {
+            const prev = extractCommandFromRaw(log.responseRaw);
+            if (!prev) return false;
+            return normalizeCommand(prev) === normalized;
+          }).length;
+          if (recentSame >= 2) {
+            errors.push('同じ意味の SHELL コマンドの繰り返しは禁止です');
+          }
         }
       }
       if (candidate.type === 'PROPOSAL') {
@@ -374,6 +447,7 @@ ${responseRaw}
 
     let planErrors = validatePlan(plan);
     if (planErrors.length > 0) {
+      let repairedRaw: string | null = null;
       try {
         const repairPrompt = `
 以下の JSON は制約に違反しています。**正しい JSON のみ** を出力してください。
@@ -394,7 +468,7 @@ ${planErrors.map(e => `- ${e}`).join('\n')}
 
 ${responseRaw}
         `.trim();
-        const repairedRaw = await this.llm.chatOllama(repairPrompt, systemPrompt);
+        repairedRaw = await this.llm.chatOllama(repairPrompt, systemPrompt);
         plan = parsePlan(repairedRaw);
         planErrors = validatePlan(plan);
         if (planErrors.length > 0) {
@@ -406,7 +480,10 @@ ${responseRaw}
           timestamp: '',
           intent: 'LLM レスポンスの再修正失敗',
           action: '修正失敗',
-          result: [`エラー : ${error.message}`],
+          result: [
+            `エラー : ${error.message}`,
+            repairedRaw ? `Repaired Raw : ${repairedRaw}` : 'Repaired Raw : (なし)'
+          ],
           next: ['再試行'],
           responseRaw
         };
