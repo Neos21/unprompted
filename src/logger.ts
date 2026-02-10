@@ -16,28 +16,32 @@ export class Logger {
 
   log(data: ActionLog): string {
     const now = new Date();
-    // JST offset is +9 hours. 
-    // However, toISOString() returns UTC. We want JST.
-    // A simple way to get YYYY-MM-DD HH:mm:SS.sss in JST is to manually format
+    // JSTのオフセットは+9時間です。
+    // date.toISOString() はUTCを返すため、手動でJSTに変換してフォーマットします。
     const toJST = (date: Date) => {
-      // Adjust to JST
+      // JSTに調整
       const jstDate = new Date(date.getTime() + 9 * 60 * 60 * 1000);
       return jstDate.toISOString().replace('Z', '').replace('T', ' ');
     };
 
     const timestampJST = toJST(now);
-    // data.timestamp should also be JST if not already or if it's new
+    // data.timestamp が空、またはUTC形式(Zで終わる)の場合はJSTを設定
     if (!data.timestamp || data.timestamp.endsWith('Z')) {
       data.timestamp = timestampJST;
     }
 
-    // Filename: YYYY-MM-DD HH-mm-SS-sss.yaml
-    // Format: 2026-02-10 12:28:35.001 -> 2026-02-10 12-28-35-001.yaml
+    // ファイル名: YYYY-MM-DD HH-mm-SS-sss.yaml
     const filename = timestampJST.replace(/:/g, '-').replace('.', '-') + '.yaml';
 
     const filepath = path.join(this.logDir, filename);
 
     const logContent = yaml.stringify(data);
+
+    // コンソールにも出力 (ユーザー要望)
+    console.log("\n--- ログ出力 ---");
+    console.log(logContent);
+    console.log("----------------\n");
+
     fs.writeFileSync(filepath, logContent, 'utf8');
 
     return filepath;
@@ -52,7 +56,7 @@ export class Logger {
     try {
       return yaml.parse(content) as ActionLog;
     } catch (e) {
-      console.error("Failed to parse last log:", e);
+      console.error("最後のログのパースに失敗しました:", e);
       return null;
     }
   }

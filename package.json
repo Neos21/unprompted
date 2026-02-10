@@ -1,9 +1,11 @@
 {
   "name": "unprompted",
-  "version": "1.0.0",
-  "description": "Unprompted は、「明確な目的やゴールを与えられなくても動き続ける AI エージェント」を研究・開発するための実験用リポジトリです。",
-  "main": "dist/main.js",
+  "private": true,
   "type": "module",
+  "description": "Unprompted は「明確な目的やゴールを与えられなくても動き続ける AI エージェント」を研究・開発するための実験用リポジトリです",
+  "scripts": {
+    "start": "tsx src/main.ts"
+  },
   "dependencies": {
     "@google/generative-ai": "0.24.1",
     "@types/node": "25.2.2",

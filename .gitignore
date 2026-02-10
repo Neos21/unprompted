@@ -5,4 +5,5 @@ Thumbs.db
 
 .qodo/
 dist/
+logs/
 node_modules/

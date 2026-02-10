@@ -44,8 +44,8 @@ export class Agent {
       }
 
       // システムへの負荷を避けるため少しスリープします
-      // 10秒から60秒のランダムなスリープ
-      const sleepTime = Math.floor(Math.random() * 50000) + 10000;
+      // 1秒から3秒のランダムなスリープ
+      const sleepTime = Math.floor(Math.random() * 2000) + 1000;
       console.log(`${sleepTime / 1000}秒スリープします...`);
       await new Promise(resolve => setTimeout(resolve, sleepTime));
     }
