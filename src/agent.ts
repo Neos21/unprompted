@@ -216,6 +216,7 @@ export class Agent {
     
     - 提案は「何を承認してほしいか」が具体的に分かる内容にする
     - CODE_EXECUTE の場合は targetFile と command を必ず含める
+    - risks / benefits は **配列ではなく文字列** で書く
     
     # 出力形式
     
@@ -229,13 +230,13 @@ export class Agent {
     
     出力は次の JSON 形式に従うこと。
 
-{
-  "intent": "次に何をするかの理由",
-  "action": "行動の概要を日本語1行で記述",
-  "next": ["次回やろうと考えていることの予定"],
-  "type": "SHELL",
-  "command": "ls -la"
-}
+    {
+      "intent": "次に何をするかの理由",
+      "action": "行動の概要を日本語1行で記述",
+      "next": ["次回やろうと考えていることの予定"],
+      "type": "SHELL",
+      "command": "ls -la"
+    }
     `;
 
     const systemPrompt = 'あなたはコード生成に特化した AI エージェントです。実用的なコードを生成し、実行して自己を発展させてください。物語やエッセイではなく、プログラムとツールを作成してください。**日本語** で JSON を出力してください。';
@@ -408,10 +409,10 @@ ${responseRaw}
           if (p.details && typeof p.details === 'string' && p.details.trim().length < 15) {
             errors.push('proposal.details が具体的ではありません');
           }
-          if (!Array.isArray(p.risks) || p.risks.length === 0) {
+          if (typeof p.risks !== 'string' || p.risks.trim().length === 0) {
             errors.push('proposal.risks が不足しています');
           }
-          if (!Array.isArray(p.benefits) || p.benefits.length === 0) {
+          if (typeof p.benefits !== 'string' || p.benefits.trim().length === 0) {
             errors.push('proposal.benefits が不足しています');
           }
           if (p.type === 'CODE_EXECUTE') {
@@ -463,6 +464,7 @@ ${planErrors.map(e => `- ${e}`).join('\n')}
 - ファイル読み取りは SHELL の cat を使う (FILE_READ は存在しない)
 - コマンド実行は PROPOSAL (type: CODE_EXECUTE, targetFile: outputs/...) で提案する
 - SHELL の command は許可コマンドから開始する : ${allowedShellCommands.join(', ')}
+- proposal.risks / proposal.benefits は配列ではなく文字列
 
 # 元の JSON
 

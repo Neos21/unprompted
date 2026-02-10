@@ -39,8 +39,8 @@ export class Logger {
       console.log(`種類 : ${data.proposal.type}`);
       console.log(`理由 : ${data.proposal.reasoning}`);
       console.log(`詳細 : ${data.proposal.details}`);
-      console.log(`リスク : ${data.proposal.risks.join(', ')}`);
-      console.log(`利益 : ${data.proposal.benefits.join(', ')}`);
+      console.log(`リスク : ${data.proposal.risks}`);
+      console.log(`利益 : ${data.proposal.benefits}`);
       console.log('承認する場合は `proposals/` 内の YAML ファイルに `approved: true` を追記してください');
       console.log('==============================');
     }

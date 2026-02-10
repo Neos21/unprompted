@@ -13,8 +13,8 @@ export interface Proposal {
   title: string;        // 提案のタイトル
   reasoning: string;    // 提案理由
   details: string;      // 詳細説明
-  risks: string[];      // リスク評価
-  benefits: string[];   // 期待される利益
+  risks: string;        // リスク評価
+  benefits: string;     // 期待される利益
 
   // `CODE_EXECUTE` の場合
   targetFile?: string;  // 実行するファイルパス (例 : `outputs/script.ts`)
@@ -55,8 +55,8 @@ export interface PlanProposal {
   title: string;
   reasoning: string;
   details: string;
-  risks: string[];
-  benefits: string[];
+  risks: string;
+  benefits: string;
   targetFile?: string;
   command?: string;
   url?: string;
