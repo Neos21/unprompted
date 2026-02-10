@@ -1,7 +1,8 @@
 
 import { LLMClient } from './llm.js';
 import { Logger } from './logger.js';
-import { ActionLog } from './types.js';
+import { ActionLog, Proposal } from './types.js';
+import { HttpClient } from './http_client.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import { exec } from 'child_process';
@@ -13,12 +14,14 @@ const execAsync = promisify(exec);
 export class Agent {
   private llm: LLMClient;
   private logger: Logger;
+  private httpClient: HttpClient;
   private isRunning: boolean = true;
   private boredom: number = 0;
 
   constructor(apiKey: string | undefined) {
     this.llm = new LLMClient(apiKey);
     this.logger = new Logger();
+    this.httpClient = new HttpClient();
   }
 
   async start() {
@@ -43,6 +46,7 @@ export class Agent {
       } catch (error) {
         console.error("ループ内でエラーが発生しました:", error);
       }
+
 
       // システムへの負荷を避けるため少しスリープします
       // 1秒から3秒のランダムなスリープ
@@ -95,6 +99,45 @@ export class Agent {
       }
     }
 
+    // 承認済み提案のチェックと実行
+    const approvedProposals = this.logger.getApprovedProposals();
+    if (approvedProposals.length > 0) {
+      console.log(`\n🎉 承認済みの提案が ${approvedProposals.length} 件見つかりました！実行します...\n`);
+
+      for (const proposal of approvedProposals) {
+        try {
+          const result = await this.executeProposal(proposal);
+
+          // 実行結果をログに記録
+          this.logger.log({
+            timestamp: "",
+            intent: `承認済み提案の実行: ${proposal.title}`,
+            action: [`EXECUTE_PROPOSAL: ${proposal.type}`],
+            result: result,
+            next: ["通常のループを継続"]
+          });
+
+          // 実行後は提案ファイルを削除
+          if (proposal.id) {
+            this.logger.deleteProposal(proposal.id);
+          }
+        } catch (error: any) {
+          console.error(`提案の実行に失敗しました:`, error);
+          this.logger.log({
+            timestamp: "",
+            intent: `提案実行の失敗: ${proposal.title}`,
+            action: [`EXECUTE_PROPOSAL: ${proposal.type}`],
+            result: [`エラー: ${error.message}`],
+            next: ["エラーを記録して継続"]
+          });
+        }
+      }
+
+      // 提案を実行したのでこのループは終了
+      return;
+    }
+
+
     // 2. 意図と行動の決定 (Decide Intent & Action)
     // 2. 意図と行動の決定 (Decide Intent & Action)
     const context = `
@@ -135,6 +178,35 @@ export class Agent {
     - **意味のある**コンテンツを作成してください。ランダムなデータではなく、物語、詩、エッセイ、有用なコード、研究ノートなど。
     - **以前の作業を継続**してください。例えば、前回 "story.md" を書いたなら、今回はその続きを書いてください。
     - 既存の生成ファイル (${outputFiles.join(', ')}) を読み込み、それを発展させてください。
+    
+    **新機能: 提案メカニズム**:
+    あなたは、現在許可されていない行動を「提案」することができます。
+    提案できる行動:
+    - HTTP リクエストによる外部情報取得 (type: "HTTP_REQUEST") - **実装済み**
+    - Express.js サーバの起動 (type: "SERVER_START") - 未実装
+    - npm パッケージのインストール (type: "INSTALL_PACKAGE") - 無効化
+    - src/ 配下のコード変更 (type: "SELF_MODIFY") - 無効化
+    - 新しいシェルコマンドの許可 (type: "SHELL_COMMAND") - 手動実装が必要
+    - その他の行動 (type: "OTHER")
+    
+    提案フォーマット:
+    {
+      "intent": "なぜこの提案をするのか",
+      "action": ["PROPOSAL"],
+      "type": "PROPOSAL",
+      "proposal": {
+        "type": "HTTP_REQUEST",
+        "title": "提案のタイトル",
+        "reasoning": "提案する理由",
+        "details": "詳細な説明",
+        "risks": ["セキュリティリスク", "データ流出の可能性"],
+        "benefits": ["外部情報の取得", "より創造的なコンテンツ作成"],
+        "url": "https://example.com/api",
+        "method": "GET"
+      },
+      "result": ["提案を作成しました"],
+      "next": ["人間の承認を待つ"]
+    }
     
     出力フォーマット (JSONのみ):
     {
@@ -241,6 +313,19 @@ export class Agent {
           resultLog.push(`書き込み失敗: ${e.message}`);
         }
       }
+    } else if (plan.type === 'PROPOSAL') {
+      // 提案の処理
+      if (plan.proposal) {
+        try {
+          this.logger.logProposal(plan.proposal);
+          resultLog.push(`提案を作成しました: ${plan.proposal.title}`);
+          resultLog.push("proposals/ ディレクトリに保存されました。承認待ちです。");
+        } catch (e: any) {
+          resultLog.push(`提案の保存に失敗しました: ${e.message}`);
+        }
+      } else {
+        resultLog.push("提案データが不足しています。");
+      }
     } else {
       resultLog.push("観測を完了しました。");
     }
@@ -267,5 +352,83 @@ export class Agent {
 
     this.logger.log(logEntry);
     this.boredom = 0; // 行動したので退屈をリセット (ただしループ検知で次は上がるかも)
+  }
+
+  /**
+   * 承認済み提案を実行
+   */
+  private async executeProposal(proposal: Proposal): Promise<string[]> {
+    const result: string[] = [];
+
+    try {
+      switch (proposal.type) {
+        case 'HTTP_REQUEST':
+          if (!proposal.url) {
+            throw new Error("URL が指定されていません");
+          }
+
+          console.log(`HTTP ${proposal.method || 'GET'} リクエストを実行: ${proposal.url}`);
+
+          let httpResponse;
+          if (proposal.method === 'POST') {
+            httpResponse = await this.httpClient.post(proposal.url, proposal.data);
+          } else if (proposal.method === 'PUT') {
+            httpResponse = await this.httpClient.put(proposal.url, proposal.data);
+          } else if (proposal.method === 'DELETE') {
+            httpResponse = await this.httpClient.delete(proposal.url);
+          } else {
+            httpResponse = await this.httpClient.get(proposal.url);
+          }
+
+          result.push(`HTTP ステータス: ${httpResponse.status} ${httpResponse.statusText}`);
+          result.push(`レスポンス: ${JSON.stringify(httpResponse.data).substring(0, 500)}`);
+
+          // レスポンスを outputs/ に保存
+          const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '');
+          const filename = `http_response_${timestamp}.json`;
+          const filepath = path.join(process.cwd(), 'outputs', filename);
+          fs.writeFileSync(filepath, JSON.stringify({
+            url: proposal.url,
+            method: proposal.method || 'GET',
+            status: httpResponse.status,
+            statusText: httpResponse.statusText,
+            headers: httpResponse.headers,
+            data: httpResponse.data
+          }, null, 2));
+          result.push(`レスポンスを ${filename} に保存しました`);
+          break;
+
+        case 'SERVER_START':
+          result.push("サーバ起動機能は現在未実装です。将来のバージョンで対応予定です。");
+          break;
+
+        case 'INSTALL_PACKAGE':
+          result.push("パッケージインストール機能は安全性の観点から現在無効化されています。");
+          break;
+
+        case 'SELF_MODIFY':
+          result.push("自己変更機能は安全性の観点から現在無効化されています。");
+          break;
+
+        case 'SHELL_COMMAND':
+          if (proposal.command) {
+            result.push(`新しいシェルコマンドの許可: ${proposal.command}`);
+            result.push("この機能は現在手動での実装が必要です。");
+          }
+          break;
+
+        case 'OTHER':
+          result.push(`その他の提案: ${proposal.title}`);
+          result.push(`詳細: ${proposal.details}`);
+          break;
+
+        default:
+          result.push(`未知の提案タイプ: ${proposal.type}`);
+      }
+    } catch (error: any) {
+      result.push(`提案実行エラー: ${error.message}`);
+    }
+
+    return result;
   }
 }

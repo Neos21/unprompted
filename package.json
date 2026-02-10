@@ -9,6 +9,7 @@
   "dependencies": {
     "@google/generative-ai": "0.24.1",
     "@types/node": "25.2.2",
+    "axios": "1.7.9",
     "dotenv": "17.2.4",
     "ollama": "0.6.3",
     "typescript": "5.9.3",
