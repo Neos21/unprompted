@@ -73,6 +73,9 @@ export class Logger {
 
     const filename = timestampJST.replace(/:/g, '-').replace(/ /g, '_').replace('.', '-') + `_${proposal.type}.yaml`;
     proposal.id = filename.replace('.yaml', '');
+    if (proposal.approved === undefined) {
+      proposal.approved = false;
+    }
 
     const filepath = path.join(this.proposalDir, filename);
 
@@ -99,7 +102,9 @@ export class Logger {
         const content = fs.readFileSync(path.join(this.proposalDir, file), 'utf8');
         const proposal = yaml.parse(content) as Proposal;
 
-        if (proposal && proposal.approved === true) {
+        const approvedFlag = (proposal && (proposal.approved === true || (proposal as any).approve === true));
+        if (approvedFlag) {
+          proposal.approved = true;
           proposal.id = file.replace('.yaml', '');
           approvedProposals.push(proposal);
         }

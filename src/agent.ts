@@ -1,6 +1,6 @@
 import { LLMClient } from './llm.js';
 import { Logger } from './logger.js';
-import { ActionLog, Proposal } from './types.js';
+import { ActionLog, Proposal, Plan } from './types.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import { exec } from 'child_process';
@@ -173,7 +173,7 @@ export class Agent {
     
     ${skillsMd}
     
-    # 現在の状態
+    # 現在の状態 (客観情報)
     
     - プロジェクトルートのファイル : ${files.join(', ')}
     - **あなたが生成したファイル (\`outputs/\`)** : ${outputFiles.join(', ') || 'なし'}
@@ -205,7 +205,7 @@ export class Agent {
     
     あなたはコーディングに特化した AI エージェントです。
     
-    # 推奨される行動
+    # 目的と推奨される行動
     
     - **TypeScript で実用的なコードを生成** してください
     - **生成したコードを実行** して結果を確認してください
@@ -227,12 +227,14 @@ export class Agent {
     - このシステムは **コード実行を許可していません**。実行したと書かないでください
     - 許可されている実行は読み取り専用の \`SHELL\` (ls/cat/date/pwd/whoami/curl) のみです
     - 実行が必要な場合は **提案** として出力してください
+    - **承認待ちだけでループを終えないでください**。承認待ち中でも安全にできる作業 (読み取り・要約・設計・テスト案作成など) を続けてください
     
     # 行動の書き方 (重要)
     
     - \`action\` には **日本語での作業概要** を1行で書いてください (例 : \`ログファイルを読み取り要約する\`)
     - \`action\` に英単語や \`FILE_READ\` のようなシステム語は書かないでください
     - 読み取りは \`SHELL\` の \`cat\` 等で行い、\`FILE_READ\` という行動は存在しません
+    - \`SHELL\` の場合は \`command\` に実際のコマンドを指定してください
     - コマンドを実行したい場合は \`PROPOSAL\` を出してください (type: \`CODE_EXECUTE\`, targetFile: \`outputs/...\`)
     
     # 目標の立て方
@@ -258,29 +260,34 @@ export class Agent {
       "action": "PROPOSAL",
       "type": "PROPOSAL",
       "proposal": {
-        "type": "SERVER_START など",
+        "type": "CODE_EXECUTE など",
         "title": "提案のタイトル",
         "reasoning": "提案する理由",
-        "details": "詳細な説明",
+        "details": "具体的に何を許可してほしいか (実行コマンドや対象ファイルを含める)",
         "risks": ["セキュリティリスク", "データ流出の可能性"],
-        "benefits": ["外部情報の取得", "より創造的なコンテンツ作成"],
-        "url": "https://example.com/api",
-        "method": "GET"
+        "benefits": ["実行結果の確認", "改善点の特定"],
+        "targetFile": "outputs/xxx.ts",
+        "command": "ts-node outputs/xxx.ts など"
       },
       "result": ["提案を作成しました"],
       "next": ["人間の承認を待つ"]
     }
     
-    # 出力フォーマット : JSON のみ
+    # 出力フォーマット : JSON のみ (この形式以外は不可)
+    
+    - **JSON 以外は絶対に出力しないでください**
+    - **コードブロック (\`\`\`json) を使わないでください**
+    - JSON の前後に説明文や空行を置かないでください
     
     {
       "intent": "次に何をするかの理由 (日本語)",
-      "action": "行動を説明する日本語1語",
+      "action": "行動の概要を日本語1行で記述",
       "result": ["行動の結果の自己評価 (日本語)"],
       "next": ["次回やろうと考えていることの予定 (日本語)"],
-      "type": "SHELL" or "FILE_WRITE" or "OBSERVE" or "PROPOSAL", 
+      "type": "SHELL" or "FILE_WRITE" or "OBSERVE" or "PROPOSAL",
       "target": "ファイル名 (該当する場合・必ず \`outputs/\` で始まる)",
       "content": "ファイルに書き込む内容 (書き込みの場合)",
+      "command": "SHELL の場合のみ、実行するコマンド (例: \"cat outputs/file.ts\")",
       "appendMode": true or false,  // \`FILE_WRITE\` の場合、\`true\` = 追記、\`false\` = 上書き (省略時は \`false\`)
       "state": {                    // 長期目標や進捗の更新がある場合のみ指定
         "goal": "中長期的な目的 (日本語)",
@@ -293,41 +300,6 @@ export class Agent {
     `;
 
     const systemPrompt = 'あなたはコード生成に特化した AI エージェントです。実用的なコードを生成し、実行して自己を発展させてください。物語やエッセイではなく、プログラムとツールを作成してください。**日本語** で JSON を出力してください。';
-    const responseRaw = await this.llm.chatOllama(context, systemPrompt);
-    // JSON のサニタイズとパース
-    let plan;
-    try {
-      // Markdown のコードブロック記法 (```json ... ```) を削除
-      const cleanRaw = responseRaw.replace(/```json/g, '').replace(/```/g, '').trim();
-
-      const jsonMatch = cleanRaw.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        try {
-          plan = JSON.parse(jsonMatch[0]);
-        } catch (jsonError) {
-          console.warn('JSON パースに失敗・YAML でのパースを試みます...');
-          plan = yaml.parse(jsonMatch[0]);
-        }
-      } else {
-        throw new Error('JSON が見つかりませんでした');
-      }
-    } catch (error: any) {
-      console.error('LLMレスポンスのパースに失敗しました', error);
-
-      // パース失敗をログに記録
-      const errorLog: ActionLog = {
-        timestamp: '',
-        intent: 'LLMレスポンスのパース失敗',
-        action: 'LLM Response Parsing',
-        result: [`エラー : ${error.message}`, `Raw Response : ${responseRaw}`],
-        next: ['再試行'],
-        responseRaw
-      };
-      this.logger.log(errorLog);
-
-      this.boredom += 2;  // 考えるのに失敗して、退屈してきた
-      return;
-    }
 
     const parsePlan = (raw: string): any => {
       const cleanRaw = raw.replace(/```json/g, '').replace(/```/g, '').trim();
@@ -335,14 +307,58 @@ export class Agent {
       if (!jsonMatch) {
         throw new Error('JSON が見つかりませんでした');
       }
-      try {
-        return JSON.parse(jsonMatch[0]);
-      } catch {
-        return yaml.parse(jsonMatch[0]);
-      }
+      // まず JSON として厳格にパースする
+      return JSON.parse(jsonMatch[0]);
     };
 
-    const normalizePlan = (rawPlan: any): any => {
+    const responseRaw = await this.llm.chatOllama(context, systemPrompt);
+    // JSON のサニタイズとパース
+    let plan: Plan | any;
+    try {
+      plan = parsePlan(responseRaw);
+    } catch (error: any) {
+      console.error('LLMレスポンスのパースに失敗しました', error);
+      try {
+        const strictPrompt = `
+以下の出力は JSON ではありません。**厳密な JSON のみ** を出力してください。
+説明文・コードブロック・余計な文字は一切禁止です。
+
+# 出力フォーマット
+{
+  "intent": "...",
+  "action": "...",
+  "result": ["..."],
+  "next": ["..."],
+  "type": "SHELL" or "FILE_WRITE" or "OBSERVE" or "PROPOSAL",
+  "target": "...",
+  "content": "...",
+  "command": "...",
+  "appendMode": true or false,
+  "state": { "goal": "...", "milestones": ["..."], "progress": "...", "nextFocus": "...", "blockers": ["..."] }
+}
+
+# 元の出力
+${responseRaw}
+        `.trim();
+        const repairedRaw = await this.llm.chatOllama(strictPrompt, systemPrompt);
+        plan = parsePlan(repairedRaw);
+      } catch (repairError: any) {
+        // パース失敗をログに記録
+        const errorLog: ActionLog = {
+          timestamp: '',
+          intent: 'LLMレスポンスのパース失敗',
+          action: 'LLM Response Parsing',
+          result: [`エラー : ${repairError.message}`, `Raw Response : ${responseRaw}`],
+          next: ['再試行'],
+          responseRaw
+        };
+        this.logger.log(errorLog);
+        this.boredom += 2;
+        return;
+      }
+    }
+
+    const normalizePlan = (rawPlan: any): Plan | any => {
       if (!rawPlan || typeof rawPlan !== 'object') return rawPlan;
       if (rawPlan.type === 'CODE_EXECUTE') {
         rawPlan.type = 'PROPOSAL';
@@ -389,15 +405,51 @@ export class Agent {
       if (!candidate.type || !allowedTypes.has(candidate.type)) {
         errors.push(`type が不正です: ${candidate.type}`);
       }
+      if (candidate.type === 'FILE_READ') {
+        errors.push('FILE_READ は無効です (SHELL の cat を使ってください)');
+      }
       const actionText = Array.isArray(candidate.action) ? candidate.action.join(' / ') : candidate.action;
       if (!actionText || typeof actionText !== 'string') {
         errors.push('action が文字列ではありません');
       }
       if (candidate.type === 'SHELL') {
-        const rawAction = Array.isArray(candidate.action) ? candidate.action[0] : candidate.action;
-        const cmd = (rawAction || '').split(' ')[0];
+        const rawCommand = candidate.command || (Array.isArray(candidate.action) ? candidate.action[0] : candidate.action);
+        const cmd = (rawCommand || '').split(' ')[0];
         if (!allowedShellCommands.includes(cmd)) {
-          errors.push(`SHELL の action が許可コマンドではありません : ${cmd}`);
+          errors.push(`SHELL の command が許可コマンドではありません : ${cmd}`);
+        }
+      }
+      if (candidate.type === 'PROPOSAL') {
+        if (!candidate.proposal || typeof candidate.proposal !== 'object') {
+          errors.push('proposal がありません');
+        } else {
+          const p = candidate.proposal;
+          if (!p.type || !p.title || !p.reasoning || !p.details) {
+            errors.push('proposal の必須項目 (type/title/reasoning/details) が不足しています');
+          }
+          if (p.title && p.reasoning && p.title === p.reasoning) {
+            errors.push('proposal.title と reasoning が同一です');
+          }
+          if (p.details && p.reasoning && p.details === p.reasoning) {
+            errors.push('proposal.details が reasoning と同一です');
+          }
+          if (p.details && typeof p.details === 'string' && p.details.trim().length < 15) {
+            errors.push('proposal.details が具体的ではありません');
+          }
+          if (!Array.isArray(p.risks) || p.risks.length === 0) {
+            errors.push('proposal.risks が不足しています');
+          }
+          if (!Array.isArray(p.benefits) || p.benefits.length === 0) {
+            errors.push('proposal.benefits が不足しています');
+          }
+          if (p.type === 'CODE_EXECUTE') {
+            if (!p.targetFile) {
+              errors.push('CODE_EXECUTE の targetFile がありません');
+            }
+            if (!p.command) {
+              errors.push('CODE_EXECUTE の command がありません');
+            }
+          }
         }
       }
       return errors;
@@ -411,16 +463,19 @@ export class Agent {
 以下の JSON は制約に違反しています。**正しい JSON のみ** を出力してください。
 
 # エラー
+
 ${planErrors.map(e => `- ${e}`).join('\n')}
 
 # 制約
+
 - type は "SHELL" / "FILE_WRITE" / "PROPOSAL" / "OBSERVE" のいずれか
 - action は日本語での作業概要 (英単語や FILE_READ などは禁止)
 - ファイル読み取りは SHELL の cat を使う (FILE_READ は存在しない)
 - コマンド実行は PROPOSAL (type: CODE_EXECUTE, targetFile: outputs/...) で提案する
-- SHELL の action は許可コマンドから開始する : ${allowedShellCommands.join(', ')}
+- SHELL の command は許可コマンドから開始する : ${allowedShellCommands.join(', ')}
 
 # 元の JSON
+
 ${responseRaw}
         `.trim();
         const repairedRaw = await this.llm.chatOllama(repairPrompt, systemPrompt);
@@ -465,22 +520,39 @@ ${responseRaw}
       }
     }
 
+    const recentlyReadTarget = (target: string): boolean => {
+      const needle = `cat ${target}`;
+      return recentLogs.some(log => (log.responseRaw || '').includes(needle));
+    };
+
+    if (plan.type === 'FILE_WRITE' && plan.target && safeTarget && fs.existsSync(safeTarget)) {
+      if (!recentlyReadTarget(plan.target)) {
+        plan = {
+          type: 'SHELL',
+          intent: '既存ファイルを読み取り、内容を把握してから更新するため',
+          action: '対象ファイルを読み取り',
+          command: `cat ${plan.target}`,
+          next: ['内容を反映して改良または追記を検討する']
+        };
+      }
+    }
+
     if (!allowedTypes.has(plan.type)) {
       resultLog.push(`未対応の行動タイプが指定されました : ${plan.type}`);
       resultLog.push('実行は行われませんでした');
     } else if (plan.type === 'SHELL') {
       try {
         // 安全な読み取り専用コマンドのみ許可
-        const rawAction = Array.isArray(plan.action) ? plan.action[0] : plan.action;
-        const cmd = (rawAction || '').split(' ')[0];
+        const rawCommand = plan.command || (Array.isArray(plan.action) ? plan.action[0] : plan.action);
+        const cmd = (rawCommand || '').split(' ')[0];
 
         if (allowedShellCommands.includes(cmd)) {
           // `cat` コマンドの場合もログファイルや `outputs/` 以外の読み取りは許可するが、書き込みリダイレクトは禁止すべき
           // 簡易的なチェックとして `>` や `|` を禁止
-          if ((rawAction || '').includes('>') || (rawAction || '').includes('|')) {
+          if ((rawCommand || '').includes('>') || (rawCommand || '').includes('|')) {
             resultLog.push('安全のため、シェルでのリダイレクトやパイプは禁止されています。`FILE_WRITE` を使用してください');
           } else {
-            const { stdout, stderr } = await execAsync(rawAction);
+            const { stdout, stderr } = await execAsync(rawCommand);
             const output = stdout.trim();
 
             if (cmd === 'curl') {

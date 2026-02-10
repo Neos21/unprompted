@@ -39,3 +39,43 @@ export interface ActionLog {
   proposal?: Proposal;   // 提案がある場合に記録
   responseRaw?: string;  // AI の生の出力 (デバッグ用)
 }
+
+export type PlanType = 'SHELL' | 'FILE_WRITE' | 'PROPOSAL' | 'OBSERVE';
+
+export interface PlanState {
+  goal?: string;
+  milestones?: string[];
+  progress?: string;
+  nextFocus?: string;
+  blockers?: string[];
+}
+
+export interface PlanProposal {
+  type: ProposalType;
+  title: string;
+  reasoning: string;
+  details: string;
+  risks: string[];
+  benefits: string[];
+  targetFile?: string;
+  command?: string;
+  url?: string;
+  method?: string;
+}
+
+export interface Plan {
+  intent: string;
+  action: string;
+  result?: string[];
+  next?: string[] | string;
+  type: PlanType;
+  target?: string;
+  content?: string;
+  command?: string;
+  appendMode?: boolean;
+  proposal?: PlanProposal;
+  state?: PlanState;
+  targetFile?: string;
+  details?: string;
+  proposalType?: ProposalType;
+}
