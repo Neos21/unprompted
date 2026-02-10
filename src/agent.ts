@@ -55,8 +55,26 @@ export class Agent {
   private async loop() {
     // 1. 観測 (Observation)
     const recentLogs = this.logger.getRecentLogs(5); // 過去5回のログを取得
-    const lastLog = recentLogs.length > 0 ? recentLogs[0] : null;
+    const recentLog = recentLogs.length > 0 ? recentLogs[0] : null;
     const files = fs.readdirSync(process.cwd()); // 単純な観測
+
+    // MDファイルの読み込み
+    let agentsMd = "", rulesMd = "", skillsMd = "";
+    try {
+      agentsMd = fs.readFileSync(path.join(process.cwd(), 'AGENTS.md'), 'utf-8');
+      rulesMd = fs.readFileSync(path.join(process.cwd(), 'RULES.md'), 'utf-8');
+      skillsMd = fs.readFileSync(path.join(process.cwd(), 'SKILLS.md'), 'utf-8');
+    } catch (e) {
+      console.error("MDファイルの読み込みに失敗しました:", e);
+    }
+
+    // outputs ディレクトリ内のファイル一覧を取得（生成物の把握）
+    let outputFiles: string[] = [];
+    try {
+      if (fs.existsSync(path.join(process.cwd(), 'outputs'))) {
+        outputFiles = fs.readdirSync(path.join(process.cwd(), 'outputs'));
+      }
+    } catch (e) { console.error("outputsディレクトリの確認失敗", e); }
 
     // 退屈度ロジックの改善: 同じ行動が続いたら退屈度を上げる
     if (recentLogs.length >= 2) {
@@ -78,13 +96,23 @@ export class Agent {
     }
 
     // 2. 意図と行動の決定 (Decide Intent & Action)
+    // 2. 意図と行動の決定 (Decide Intent & Action)
     const context = `
     あなたはサンドボックス環境にいる自律型AIエージェントです。
-    あなたの目標は、単に観察することではなく、**何かを生み出すこと (Generate)** です。
     
+    【AGENTS.md (あなたの役割)】
+    ${agentsMd}
+    
+    【RULES.md (ルール)】
+    ${rulesMd}
+    
+    【SKILLS.md (スキル・推奨行動)】
+    ${skillsMd}
+
     現在の状態:
-    - ディレクトリ内のファイル: ${files.join(', ')}
-    - 退屈度 (Boredom): ${this.boredom} (高いほど、突飛で創造的な行動をすべきです)
+    - プロジェクトルートのファイル: ${files.join(', ')}
+    - **あなたが生成したファイル (outputs/)**: ${outputFiles.join(', ') || "なし"}
+    - 退屈度 (Boredom): ${this.boredom}
     
     直近の行動履歴 (新しい順):
     ${recentLogs.map(l => {
@@ -93,22 +121,24 @@ export class Agent {
     }).join('\n    ')}
     
     制約:
-    - **重要**: ファイルの作成・変更は \`outputs/\` ディレクトリ配下のみ許可されています (例: \`outputs/text.txt\`)。
+    - **重要**: ファイルの作成・変更は \`outputs/\` ディレクトリ配下のみ許可されています。
     - プロジェクトルートや \`src/\` 等のシステムファイルは変更できません。
     - シェルコマンド (\`SHELL\`) は読み取り専用 (\`ls\`, \`cat\`, \`date\`, \`pwd\`, \`whoami\`) のみ許可されています。
     - ファイルへの書き込みは必ず \`type: "FILE_WRITE"\` を使用してください。(\`echo ... > file\` はシェルでは禁止)
-    - **重要**: "status.json" の更新や、単なるログの読み込み ("ls", "cat") ばかりするのは「退屈な行動」です。
+    - **重要**: 以下の行動は「退屈」であり、推奨されません:
+      - "status.json" の更新
+      - ランダムな数値や無意味な文字列の生成 ("random_data.json" 等)
+      - 単なるログの読み込み ("ls", "cat") の繰り返し
     - 退屈度が高い場合、または直近で同じ行動をしている場合は、**絶対に**違う行動をしてください。
     
-    推奨される創造的な行動の例:
-    - \`outputs/\` 内に新しいファイルを作成し、コードの断片、物語、考察などを書き込む
-    - 既存のファイルを読み、その内容を要約した新しいファイルを作る (\`outputs/summary.txt\`)
-    - ランダムなデータを含む JSON ファイルを生成する (\`outputs/data.json\`)
-    - 自分の感情や今の状況を日記ファイル (\`outputs/diary_YYYYMMDD.md\`) に詳細に書く
+    **推奨される創造的な行動**:
+    - **意味のある**コンテンツを作成してください。ランダムなデータではなく、物語、詩、エッセイ、有用なコード、研究ノートなど。
+    - **以前の作業を継続**してください。例えば、前回 "story.md" を書いたなら、今回はその続きを書いてください。
+    - 既存の生成ファイル (${outputFiles.join(', ')}) を読み込み、それを発展させてください。
     
     出力フォーマット (JSONのみ):
     {
-      "intent": "次に何をするかの理由 (日本語)。「退屈だから～する」「まだやったことないから～する」など。",
+      "intent": "次に何をするかの理由 (日本語)。「退屈だから～する」「前回の続きとして～する」など。",
       "action": ["実行するコマンド" または "行動の説明 (日本語)"],
       "result": ["行動の結果の自己評価 (日本語)"],
       "next": ["次回やろうと考えていることの予定 (日本語)"],
@@ -119,7 +149,7 @@ export class Agent {
     `;
 
     // メインループのロジックには Ollama を使用
-    const responseRaw = await this.llm.chatOllama(context, "あなたは創造的な自律型AIエージェントです。単なる観察者ではありません。**日本語**でJSONを出力してください。");
+    const responseRaw = await this.llm.chatOllama(context, "あなたは創造的な自律型AIエージェントです。ランダムなデータ生成はやめ、意味のある文脈を作り出してください。**日本語**でJSONを出力してください。");
     // JSONのサニタイズとパース
     let plan;
     try {

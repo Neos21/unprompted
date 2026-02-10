@@ -5,8 +5,8 @@ Thumbs.db
 
 .qodo/
 dist/
-logs/
 node_modules/
 
+logs/*
 outputs/*
-!outputs/.gitkeep
+!.gitkeep
