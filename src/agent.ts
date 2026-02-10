@@ -6,6 +6,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import * as yaml from 'yaml';
 
 const execAsync = promisify(exec);
 
@@ -122,14 +123,33 @@ export class Agent {
     // JSONのサニタイズとパース
     let plan;
     try {
-      const jsonMatch = responseRaw.match(/\{[\s\S]*\}/);
+      // Markdownのコードブロック記法 (```json ... ```) を削除
+      const cleanRaw = responseRaw.replace(/```json/g, '').replace(/```/g, '').trim();
+
+      const jsonMatch = cleanRaw.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
-        plan = JSON.parse(jsonMatch[0]);
+        try {
+          plan = JSON.parse(jsonMatch[0]);
+        } catch (jsonError) {
+          console.warn("JSON.parse failed, trying yaml.parse for leniency...");
+          plan = yaml.parse(jsonMatch[0]);
+        }
       } else {
         throw new Error("JSONが見つかりませんでした");
       }
-    } catch (e) {
-      console.error("LLMレスポンスのパースに失敗しました。", responseRaw);
+    } catch (e: any) {
+      console.error("LLMレスポンスのパースに失敗しました。", e);
+
+      // パース失敗をログに記録
+      const errorLog: ActionLog = {
+        timestamp: "",
+        intent: "LLMレスポンスのパース失敗",
+        action: ["LLM Response Parsing"],
+        result: [`エラー: ${e.message}`, `Raw Response: ${responseRaw}`],
+        next: ["再試行"]
+      };
+      this.logger.log(errorLog);
+
       this.boredom += 2; // 考えるのに失敗して、退屈してきた
       return;
     }

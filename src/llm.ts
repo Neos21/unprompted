@@ -27,7 +27,10 @@ export class LLMClient {
           { role: 'system', content: systemPrompt || '' },
           { role: 'user', content: prompt }
         ],
-        stream: false // ストリーミングを明示的に無効化
+        stream: false, // ストリーミングを明示的に無効化
+        options: {
+          num_ctx: 8192 // Increase context window to prevent truncation
+        }
       });
       return response.message.content;
     } catch (error) {
