@@ -2,7 +2,7 @@
   "name": "unprompted",
   "private": true,
   "type": "module",
-  "description": "Unprompted は「明確な目的やゴールを与えられなくても動き続ける AI エージェント」を研究・開発するための実験用リポジトリです",
+  "description": "「明確な目的やゴールを与えられなくても動き続ける AI エージェント」を研究・開発するための実験用リポジトリ",
   "scripts": {
     "start": "tsx src/main.ts",
     "clear-logs": "find ./logs -maxdepth 1 -not -name '.gitkeep' -not -wholename './logs' -delete",
@@ -11,15 +11,12 @@
     "clear-files": "npm run clear-logs && npm run clear-outputs && npm run clear-proposals"
   },
   "dependencies": {
-    "@google/generative-ai": "0.24.1",
-    "@types/node": "25.2.2",
-    "axios": "1.7.9",
-    "dotenv": "17.2.4",
     "ollama": "0.6.3",
-    "typescript": "5.9.3",
     "yaml": "2.8.2"
   },
   "devDependencies": {
-    "tsx": "4.21.0"
+    "@types/node": "25.2.2",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3"
   }
 }
