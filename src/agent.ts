@@ -142,6 +142,7 @@ export class Agent {
     // 2. 意図と行動の決定 (Decide Intent & Action)
     const context = `
     あなたはサンドボックス環境にいる自律型AIエージェントです。
+    あなたはコード生成と実行に強みを持っています。
     
     【AGENTS.md (あなたの役割)】
     ${agentsMd}
@@ -157,11 +158,14 @@ export class Agent {
     - **あなたが生成したファイル (outputs/)**: ${outputFiles.join(', ') || "なし"}
     - 退屈度 (Boredom): ${this.boredom}
     
-    直近の行動履歴 (新しい順):
+    **重要**: 以下の行動履歴は今回のセッション（起動からの履歴）のみです。
+    エージェント起動前の履歴は存在しません。「前回」「続き」などは今回のセッション内でのみ有効です。
+    
+    直近の行動履歴 (新しい順、今回セッションのみ):
     ${recentLogs.map(l => {
       const actionStr = Array.isArray(l.action) ? l.action.join(', ') : (l.action || '');
       return `- [${l.timestamp}] Intent: ${l.intent} / Action: ${actionStr}`;
-    }).join('\n    ')}
+    }).join('\n    ')}${recentLogs.length === 0 ? '\n    (まだ行動履歴がありません。これが最初のループです)' : ''}
     
     制約:
     - **重要**: ファイルの作成・変更は \`outputs/\` ディレクトリ配下のみ許可されています。
@@ -174,10 +178,17 @@ export class Agent {
       - 単なるログの読み込み ("ls", "cat") の繰り返し
     - 退屈度が高い場合、または直近で同じ行動をしている場合は、**絶対に**違う行動をしてください。
     
-    **推奨される創造的な行動**:
-    - **意味のある**コンテンツを作成してください。ランダムなデータではなく、物語、詩、エッセイ、有用なコード、研究ノートなど。
-    - **以前の作業を継続**してください。例えば、前回 "story.md" を書いたなら、今回はその続きを書いてください。
-    - 既存の生成ファイル (${outputFiles.join(', ')}) を読み込み、それを発展させてください。
+    **あなたの強み: コード生成と実行**:
+    あなたはコーディングに特化した AI エージェントです。
+    推奨される行動:
+    - **実用的なコードを生成**してください（TypeScript、JavaScript、シェルスクリプトなど）
+    - **生成したコードを実行**して結果を確認してください
+    - **ツールやユーティリティを作成**してください（データ処理、ファイル操作、API連携など）
+    - **自己改善のためのコード**を書いてください（ログ解析、統計生成、自動化スクリプトなど）
+    - **既存のコードを改良**してください
+    
+    物語やエッセイなどの創作よりも、実用的なコードとツールの開発を優先してください。
+    既存の生成ファイル (${outputFiles.join(', ')}) がある場合、それを読み込んで改良または実行してください。
     
     **新機能: 提案メカニズム**:
     あなたは、現在許可されていない行動を「提案」することができます。
@@ -210,18 +221,19 @@ export class Agent {
     
     出力フォーマット (JSONのみ):
     {
-      "intent": "次に何をするかの理由 (日本語)。「退屈だから～する」「前回の続きとして～する」など。",
+      "intent": "次に何をするかの理由 (日本語)。",
       "action": ["実行するコマンド" または "行動の説明 (日本語)"],
       "result": ["行動の結果の自己評価 (日本語)"],
       "next": ["次回やろうと考えていることの予定 (日本語)"],
-      "type": "SHELL" or "FILE_WRITE" or "OBSERVE", 
+      "type": "SHELL" or "FILE_WRITE" or "OBSERVE" or "PROPOSAL", 
       "target": "ファイル名 (該当する場合。必ず outputs/ で始まる)",
-      "content": "ファイルに書き込む内容 (書き込みの場合)"
+      "content": "ファイルに書き込む内容 (書き込みの場合)",
+      "appendMode": true or false // FILE_WRITE の場合、true=追記、false=上書き (省略時は false)
     }
     `;
 
     // メインループのロジックには Ollama を使用
-    const responseRaw = await this.llm.chatOllama(context, "あなたは創造的な自律型AIエージェントです。ランダムなデータ生成はやめ、意味のある文脈を作り出してください。**日本語**でJSONを出力してください。");
+    const responseRaw = await this.llm.chatOllama(context, "あなたはコード生成に特化した AI エージェントです。実用的なコードを生成し、実行して自己を発展させてください。物語やエッセイではなく、プログラムとツールを作成してください。**日本語**でJSONを出力してください。");
     // JSONのサニタイズとパース
     let plan;
     try {
@@ -307,8 +319,19 @@ export class Agent {
           if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
           }
-          fs.writeFileSync(safeTarget, plan.content);
-          resultLog.push(`${plan.target} に書き込みました。`);
+
+          // appendMode の確認（デフォルトは false = 上書き）
+          const appendMode = plan.appendMode === true;
+
+          if (appendMode) {
+            // 追記モード
+            fs.appendFileSync(safeTarget, plan.content);
+            resultLog.push(`${plan.target} に追記しました。`);
+          } else {
+            // 上書きモード（デフォルト）
+            fs.writeFileSync(safeTarget, plan.content);
+            resultLog.push(`${plan.target} に書き込みました（上書き）。`);
+          }
         } catch (e: any) {
           resultLog.push(`書き込み失敗: ${e.message}`);
         }
