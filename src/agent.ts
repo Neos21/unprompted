@@ -14,10 +14,12 @@ export class Agent {
   private logger: Logger;
   private isRunning: boolean = true;
   private boredom: number = 0;
+  private statePath: string;
 
   constructor() {
     this.llm = new LLMClient();
     this.logger = new Logger();
+    this.statePath = path.join(process.cwd(), 'outputs', 'state.yaml');
   }
 
   public async start() {
@@ -27,8 +29,8 @@ export class Agent {
       console.log('\nSIGINT を受信しました。停止します...');
       this.isRunning = false;
       this.logger.log({
-        timestamp: '', // Logger 側で現在時刻 (JST) が設定されます
-        intent: 'システムがSIGINTによる即時停止を要求しました',
+        timestamp: '',  // Logger 側で現在時刻 (JST) が設定されます
+        intent: 'システムが SIGINT による即時停止を要求しました',
         action: 'STOP',
         result: ['ユーザーによってプロセスが終了されました'],
         next: []
@@ -54,6 +56,8 @@ export class Agent {
     // 1. 観測 (Observation)
     const recentLogs = this.logger.getRecentLogs(5); // 過去5回のログを取得
     const files = fs.readdirSync(process.cwd()); // 単純な観測
+    const allowedTypes = new Set(['SHELL', 'FILE_WRITE', 'PROPOSAL', 'OBSERVE']);
+    const allowedShellCommands = ['ls', 'cat', 'date', 'pwd', 'whoami', 'curl'];
 
     // MD ファイルの読み込み
     let agentsMd = '', rulesMd = '', skillsMd = '';
@@ -62,7 +66,7 @@ export class Agent {
       rulesMd = fs.readFileSync(path.join(process.cwd(), 'RULES.md'), 'utf-8');
       skillsMd = fs.readFileSync(path.join(process.cwd(), 'SKILLS.md'), 'utf-8');
     } catch (error) {
-      console.error('MDファイルの読み込みに失敗しました', error);
+      console.error('MD ファイルの読み込みに失敗しました', error);
     }
 
     // `outputs/` ディレクトリ内のファイル一覧を取得 (生成物の把握)
@@ -72,6 +76,23 @@ export class Agent {
         outputFiles = fs.readdirSync(path.join(process.cwd(), 'outputs'));
       }
     } catch (error) { console.error('`outputs/` ディレクトリの確認失敗', error); }
+
+    // 永続状態の読み込み (存在しない場合は空で OK)
+    let stateSummary = 'なし';
+    let stateObj: any = null;
+    try {
+      if (fs.existsSync(this.statePath)) {
+        const stateRaw = fs.readFileSync(this.statePath, 'utf-8');
+        stateObj = yaml.parse(stateRaw);
+        stateSummary = yaml.stringify(stateObj).trim() || 'なし';
+      }
+    } catch (error) {
+      console.error('state.yaml の読み込みに失敗しました', error);
+      stateSummary = '読み込み失敗';
+    }
+    if (stateSummary.length > 2000) {
+      stateSummary = stateSummary.slice(0, 2000) + '...';
+    }
 
     // 退屈度ロジックの改善 : 同じ行動が続いたら退屈度を上げる
     if (recentLogs.length >= 2) {
@@ -115,8 +136,8 @@ export class Agent {
           // 実行結果をログに記録
           this.logger.log({
             timestamp: '',
-            intent: `承認済み提案の実行: ${proposal.title}`,
-            action: `EXECUTE_PROPOSAL: ${proposal.type}`,
+            intent: `承認済み提案の実行 : ${proposal.title}`,
+            action: `EXECUTE_PROPOSAL : ${proposal.type}`,
             result: executionResult,
             next: ['通常のループを継続']
           });
@@ -126,12 +147,12 @@ export class Agent {
             this.logger.deleteProposal(proposal.id);
           }
         } catch (error: any) {
-          console.error('提案の実行に失敗しました:', error);
+          console.error('提案の実行に失敗しました', error);
           this.logger.log({
             timestamp: '',
-            intent: `提案実行の失敗: ${proposal.title}`,
-            action: `EXECUTE_PROPOSAL: ${proposal.type}`,
-            result: [`エラー: ${error.message}`],
+            intent: `提案実行の失敗 : ${proposal.title}`,
+            action: `EXECUTE_PROPOSAL : ${proposal.type}`,
+            result: [`エラー : ${error.message}`],
             next: ['エラーを記録して継続']
           });
         }
@@ -156,6 +177,7 @@ export class Agent {
     
     - プロジェクトルートのファイル : ${files.join(', ')}
     - **あなたが生成したファイル (\`outputs/\`)** : ${outputFiles.join(', ') || 'なし'}
+    - **永続状態 (\`outputs/state.yaml\`)** : ${stateSummary}
     - 退屈度 (Boredom) : ${this.boredom}
     
     **重要** : 以下の行動履歴は今回のセッション (起動からの履歴) のみです。
@@ -200,6 +222,23 @@ export class Agent {
     - 同じターゲットへの連続上書きは避けてください
     - 追記と上書きを混同しないように、\`appendMode\` を明示してください
     
+    # 実行についての重要事項
+    
+    - このシステムは **コード実行を許可していません**。実行したと書かないでください
+    - 許可されている実行は読み取り専用の \`SHELL\` (ls/cat/date/pwd/whoami/curl) のみです
+    - 実行が必要な場合は **提案** として出力してください
+    
+    # 行動の書き方 (重要)
+    
+    - \`action\` には **日本語での作業概要** を1行で書いてください (例 : \`ログファイルを読み取り要約する\`)
+    - \`action\` に英単語や \`FILE_READ\` のようなシステム語は書かないでください
+    - 読み取りは \`SHELL\` の \`cat\` 等で行い、\`FILE_READ\` という行動は存在しません
+    - コマンドを実行したい場合は \`PROPOSAL\` を出してください (type: \`CODE_EXECUTE\`, targetFile: \`outputs/...\`)
+    
+    # 目標の立て方
+    
+    - 「退屈度を下げる」など内向きの目標は避け、具体的な成果物や検証を目的にしてください
+    
     # **提案メカニズム**
     
     あなたは、現在許可されていない行動を「提案」することができます。
@@ -242,11 +281,19 @@ export class Agent {
       "type": "SHELL" or "FILE_WRITE" or "OBSERVE" or "PROPOSAL", 
       "target": "ファイル名 (該当する場合・必ず \`outputs/\` で始まる)",
       "content": "ファイルに書き込む内容 (書き込みの場合)",
-      "appendMode": true or false  // \`FILE_WRITE\` の場合、\`true\` = 追記、\`false\` = 上書き (省略時は \`false\`)
+      "appendMode": true or false,  // \`FILE_WRITE\` の場合、\`true\` = 追記、\`false\` = 上書き (省略時は \`false\`)
+      "state": {                    // 長期目標や進捗の更新がある場合のみ指定
+        "goal": "中長期的な目的 (日本語)",
+        "milestones": ["達成すべき小目標"],
+        "progress": "現在の進捗要約 (日本語)",
+        "nextFocus": "次に集中すること (日本語)",
+        "blockers": ["阻害要因"]
+      }
     }
     `;
 
-    const responseRaw = await this.llm.chatOllama(context, 'あなたはコード生成に特化した AI エージェントです。実用的なコードを生成し、実行して自己を発展させてください。物語やエッセイではなく、プログラムとツールを作成してください。**日本語** で JSON を出力してください。');
+    const systemPrompt = 'あなたはコード生成に特化した AI エージェントです。実用的なコードを生成し、実行して自己を発展させてください。物語やエッセイではなく、プログラムとツールを作成してください。**日本語** で JSON を出力してください。';
+    const responseRaw = await this.llm.chatOllama(context, systemPrompt);
     // JSON のサニタイズとパース
     let plan;
     try {
@@ -282,6 +329,123 @@ export class Agent {
       return;
     }
 
+    const parsePlan = (raw: string): any => {
+      const cleanRaw = raw.replace(/```json/g, '').replace(/```/g, '').trim();
+      const jsonMatch = cleanRaw.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        throw new Error('JSON が見つかりませんでした');
+      }
+      try {
+        return JSON.parse(jsonMatch[0]);
+      } catch {
+        return yaml.parse(jsonMatch[0]);
+      }
+    };
+
+    const normalizePlan = (rawPlan: any): any => {
+      if (!rawPlan || typeof rawPlan !== 'object') return rawPlan;
+      if (rawPlan.type === 'CODE_EXECUTE') {
+        rawPlan.type = 'PROPOSAL';
+        rawPlan.proposal = rawPlan.proposal || {
+          type: 'CODE_EXECUTE',
+          title: 'コード実行の提案',
+          reasoning: rawPlan.intent || '生成したコードの実行が必要',
+          details: '承認後に実行して結果を確認する',
+          risks: ['想定外の挙動', '環境依存のエラー'],
+          benefits: ['実行結果の確認', '改善点の特定'],
+          targetFile: rawPlan.targetFile || rawPlan.target || ''
+        };
+      }
+      if (rawPlan.type === 'PROPOSAL' && !rawPlan.proposal) {
+        rawPlan.proposal = {
+          type: rawPlan.proposalType || 'OTHER',
+          title: rawPlan.intent || '提案',
+          reasoning: rawPlan.intent || '必要な許可を得るため',
+          details: rawPlan.details || '承認が必要な行動のため',
+          risks: ['安全性の検討が必要'],
+          benefits: ['次の行動が可能になる'],
+          targetFile: rawPlan.targetFile || rawPlan.target || ''
+        };
+      }
+      return rawPlan;
+    };
+
+    const isSystemActionLike = (text: string) => {
+      if (!text) return true;
+      if (/^[A-Z0-9_ ]+$/.test(text)) return true;
+      const upper = text.toUpperCase();
+      if (upper.includes('FILE_READ') || upper.includes('FILE_WRITE') || upper.includes('SHELL') || upper.includes('PROPOSAL') || upper.includes('OBSERVE') || upper.includes('CODE_EXECUTE')) {
+        return true;
+      }
+      return false;
+    };
+
+    const validatePlan = (candidate: any): string[] => {
+      const errors: string[] = [];
+      if (!candidate || typeof candidate !== 'object') {
+        errors.push('plan がオブジェクトではありません');
+        return errors;
+      }
+      if (!candidate.type || !allowedTypes.has(candidate.type)) {
+        errors.push(`type が不正です: ${candidate.type}`);
+      }
+      const actionText = Array.isArray(candidate.action) ? candidate.action.join(' / ') : candidate.action;
+      if (!actionText || typeof actionText !== 'string') {
+        errors.push('action が文字列ではありません');
+      }
+      if (candidate.type === 'SHELL') {
+        const rawAction = Array.isArray(candidate.action) ? candidate.action[0] : candidate.action;
+        const cmd = (rawAction || '').split(' ')[0];
+        if (!allowedShellCommands.includes(cmd)) {
+          errors.push(`SHELL の action が許可コマンドではありません : ${cmd}`);
+        }
+      }
+      return errors;
+    };
+
+    plan = normalizePlan(plan);
+    let planErrors = validatePlan(plan);
+    if (planErrors.length > 0) {
+      try {
+        const repairPrompt = `
+以下の JSON は制約に違反しています。**正しい JSON のみ** を出力してください。
+
+# エラー
+${planErrors.map(e => `- ${e}`).join('\n')}
+
+# 制約
+- type は "SHELL" / "FILE_WRITE" / "PROPOSAL" / "OBSERVE" のいずれか
+- action は日本語での作業概要 (英単語や FILE_READ などは禁止)
+- ファイル読み取りは SHELL の cat を使う (FILE_READ は存在しない)
+- コマンド実行は PROPOSAL (type: CODE_EXECUTE, targetFile: outputs/...) で提案する
+- SHELL の action は許可コマンドから開始する : ${allowedShellCommands.join(', ')}
+
+# 元の JSON
+${responseRaw}
+        `.trim();
+        const repairedRaw = await this.llm.chatOllama(repairPrompt, systemPrompt);
+        plan = parsePlan(repairedRaw);
+        plan = normalizePlan(plan);
+        planErrors = validatePlan(plan);
+        if (planErrors.length > 0) {
+          throw new Error(`修正後も不正 : ${planErrors.join(' / ')}`);
+        }
+      } catch (error: any) {
+        console.error('修正プロンプトの結果が不正でした', error);
+        const errorLog: ActionLog = {
+          timestamp: '',
+          intent: 'LLM レスポンスの再修正失敗',
+          action: '修正失敗',
+          result: [`エラー : ${error.message}`],
+          next: ['再試行'],
+          responseRaw
+        };
+        this.logger.log(errorLog);
+        this.boredom += 2;
+        return;
+      }
+    }
+
     // 3. 行動の実行 (Execute Action)
     let resultLog: string[] = [];
 
@@ -301,20 +465,40 @@ export class Agent {
       }
     }
 
-    if (plan.type === 'SHELL') {
+    if (!allowedTypes.has(plan.type)) {
+      resultLog.push(`未対応の行動タイプが指定されました : ${plan.type}`);
+      resultLog.push('実行は行われませんでした');
+    } else if (plan.type === 'SHELL') {
       try {
         // 安全な読み取り専用コマンドのみ許可
-        const allowedCommands = ['ls', 'cat', 'date', 'pwd', 'whoami', 'curl'];
-        const cmd = plan.action[0].split(' ')[0];
+        const rawAction = Array.isArray(plan.action) ? plan.action[0] : plan.action;
+        const cmd = (rawAction || '').split(' ')[0];
 
-        if (allowedCommands.includes(cmd)) {
+        if (allowedShellCommands.includes(cmd)) {
           // `cat` コマンドの場合もログファイルや `outputs/` 以外の読み取りは許可するが、書き込みリダイレクトは禁止すべき
           // 簡易的なチェックとして `>` や `|` を禁止
-          if (plan.action[0].includes('>') || plan.action[0].includes('|')) {
+          if ((rawAction || '').includes('>') || (rawAction || '').includes('|')) {
             resultLog.push('安全のため、シェルでのリダイレクトやパイプは禁止されています。`FILE_WRITE` を使用してください');
           } else {
-            const { stdout, stderr } = await execAsync(plan.action[0]);
-            resultLog.push(`出力 : ${stdout.trim()}`);
+            const { stdout, stderr } = await execAsync(rawAction);
+            const output = stdout.trim();
+
+            if (cmd === 'curl') {
+              const ts = new Date().toISOString().replace(/[:.]/g, '-');
+              const curlOut = path.join(process.cwd(), 'outputs', `curl_response_${ts}.txt`);
+              const dir = path.dirname(curlOut);
+              if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+              }
+              fs.writeFileSync(curlOut, output, 'utf-8');
+              resultLog.push(`curl のレスポンスを保存しました : \`outputs/${path.basename(curlOut)}\``);
+            }
+
+            if (output) {
+              resultLog.push(`出力 : ${output}`);
+            } else {
+              resultLog.push('出力は空でした');
+            }
             if (stderr) resultLog.push(`エラー : ${stderr.trim()}`);
           }
         } else {
@@ -356,7 +540,7 @@ export class Agent {
         try {
           this.logger.logProposal(plan.proposal);
           resultLog.push(`提案を作成しました : ${plan.proposal.title}`);
-          resultLog.push('\`proposals/\` ディレクトリに保存されました。承認待ちです');
+          resultLog.push('`proposals/` ディレクトリに保存されました。承認待ちです');
         } catch (error: any) {
           resultLog.push(`提案の保存に失敗しました : ${error.message}`);
         }
@@ -368,7 +552,19 @@ export class Agent {
     }
 
     // 4. 記録 (Log)
-    const actionText = Array.isArray(plan.action) ? plan.action.join(' / ') : plan.action;
+    let actionText = Array.isArray(plan.action) ? plan.action.join(' / ') : plan.action;
+    if (!actionText || typeof actionText !== 'string' || isSystemActionLike(actionText)) {
+      if (plan.type === 'FILE_WRITE') {
+        actionText = plan.target ? `ファイル書き込み: ${plan.target}` : 'ファイル書き込み';
+      } else if (plan.type === 'SHELL') {
+        actionText = 'シェルでファイルを読み取り';
+      } else if (plan.type === 'PROPOSAL') {
+        const proposalTarget = plan.proposal?.targetFile || plan.targetFile || plan.target || '';
+        actionText = proposalTarget ? `実行提案の作成 : ${proposalTarget}` : '実行提案の作成';
+      } else {
+        actionText = '観測を実施';
+      }
+    }
     const logEntry: ActionLog = {
       timestamp: '',  // Logger が JST を設定する
       intent: plan.intent,
@@ -380,6 +576,49 @@ export class Agent {
 
     this.logger.log(logEntry);
     this.boredom = 0;  // 行動したので退屈をリセット (ただしループ検知で次は上がるかも)
+
+    // 永続状態の更新
+    try {
+      const nextList = logEntry.next || [];
+      const existing = stateObj && typeof stateObj === 'object' ? stateObj : {};
+      const history = Array.isArray(existing.history) ? existing.history : [];
+
+      history.push({
+        timestamp: new Date().toISOString(),
+        action: actionText || '',
+        result: resultLog.length > 0 ? resultLog : (plan.result ? plan.result : [])
+      });
+      if (history.length > 20) {
+        history.splice(0, history.length - 20);
+      }
+
+      const plannedState = plan.state && typeof plan.state === 'object' ? plan.state : {};
+      const sanitizeGoalText = (text: string | undefined): string => {
+        if (!text) return '';
+        if (text.includes('退屈')) return '';
+        return text;
+      };
+      const state = {
+        goal: sanitizeGoalText(plannedState.goal) || sanitizeGoalText(existing.goal) || sanitizeGoalText(plan.intent) || '',
+        milestones: plannedState.milestones || existing.milestones || [],
+        progress: plannedState.progress || existing.progress || '',
+        nextFocus: sanitizeGoalText(plannedState.nextFocus) || sanitizeGoalText(existing.nextFocus) || '',
+        blockers: plannedState.blockers || existing.blockers || [],
+        lastAction: actionText || '',
+        lastResult: resultLog.length > 0 ? resultLog : (plan.result ? plan.result : []),
+        next: nextList,
+        history,
+        updatedAt: new Date().toISOString()
+      };
+
+      const dir = path.dirname(this.statePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(this.statePath, yaml.stringify(state), 'utf-8');
+    } catch (error) {
+      console.error('state.yaml の書き込みに失敗しました', error);
+    }
   }
 
   /**
