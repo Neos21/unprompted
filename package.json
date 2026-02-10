@@ -4,7 +4,11 @@
   "type": "module",
   "description": "Unprompted は「明確な目的やゴールを与えられなくても動き続ける AI エージェント」を研究・開発するための実験用リポジトリです",
   "scripts": {
-    "start": "tsx src/main.ts"
+    "start": "tsx src/main.ts",
+    "clear-logs": "find ./logs -maxdepth 1 -not -name '.gitkeep' -not -wholename './logs' -delete",
+    "clear-outputs": "find ./outputs -maxdepth 1 -not -name '.gitkeep' -not -wholename './outputs' -delete",
+    "clear-proposals": "find ./proposals -maxdepth 1 -not -name '.gitkeep' -not -wholename './proposals' -delete",
+    "clear-files": "npm run clear-logs && npm run clear-outputs && npm run clear-proposals"
   },
   "dependencies": {
     "@google/generative-ai": "0.24.1",

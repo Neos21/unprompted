@@ -2,7 +2,6 @@
 import { LLMClient } from './llm.js';
 import { Logger } from './logger.js';
 import { ActionLog, Proposal } from './types.js';
-import { HttpClient } from './http_client.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import { exec } from 'child_process';
@@ -14,14 +13,12 @@ const execAsync = promisify(exec);
 export class Agent {
   private llm: LLMClient;
   private logger: Logger;
-  private httpClient: HttpClient;
   private isRunning: boolean = true;
   private boredom: number = 0;
 
   constructor(apiKey: string | undefined) {
     this.llm = new LLMClient(apiKey);
     this.logger = new Logger();
-    this.httpClient = new HttpClient();
   }
 
   async start() {
@@ -33,7 +30,7 @@ export class Agent {
       this.logger.log({
         timestamp: "", // Logger側で現在時刻(JST)が設定されます
         intent: "システムがSIGINTによる即時停止を要求しました。",
-        action: ["STOP"],
+        action: "STOP",
         result: ["ユーザーによってプロセスが終了されました。"],
         next: []
       });
@@ -85,8 +82,8 @@ export class Agent {
       const lastLog = recentLogs[0];
       const prevLog = recentLogs[1];
 
-      const lastAction = Array.isArray(lastLog.action) ? lastLog.action.join(' ') : (lastLog.action || '');
-      const prevAction = Array.isArray(prevLog.action) ? prevLog.action.join(' ') : (prevLog.action || '');
+      const lastAction = lastLog.action || '';
+      const prevAction = prevLog.action || '';
 
       if (lastAction === prevAction && lastAction !== '') {
         this.boredom += 3; // 同じ行動は退屈
@@ -112,7 +109,7 @@ export class Agent {
           this.logger.log({
             timestamp: "",
             intent: `承認済み提案の実行: ${proposal.title}`,
-            action: [`EXECUTE_PROPOSAL: ${proposal.type}`],
+            action: `EXECUTE_PROPOSAL: ${proposal.type}`,
             result: result,
             next: ["通常のループを継続"]
           });
@@ -126,7 +123,7 @@ export class Agent {
           this.logger.log({
             timestamp: "",
             intent: `提案実行の失敗: ${proposal.title}`,
-            action: [`EXECUTE_PROPOSAL: ${proposal.type}`],
+            action: `EXECUTE_PROPOSAL: ${proposal.type}`,
             result: [`エラー: ${error.message}`],
             next: ["エラーを記録して継続"]
           });
@@ -137,8 +134,6 @@ export class Agent {
       return;
     }
 
-
-    // 2. 意図と行動の決定 (Decide Intent & Action)
     // 2. 意図と行動の決定 (Decide Intent & Action)
     const context = `
     あなたはサンドボックス環境にいる自律型AIエージェントです。
@@ -163,7 +158,7 @@ export class Agent {
     
     直近の行動履歴 (新しい順、今回セッションのみ):
     ${recentLogs.map(l => {
-      const actionStr = Array.isArray(l.action) ? l.action.join(', ') : (l.action || '');
+      const actionStr = l.action || '';
       return `- [${l.timestamp}] Intent: ${l.intent} / Action: ${actionStr}`;
     }).join('\n    ')}${recentLogs.length === 0 ? '\n    (まだ行動履歴がありません。これが最初のループです)' : ''}
     
@@ -203,7 +198,7 @@ export class Agent {
     提案フォーマット:
     {
       "intent": "なぜこの提案をするのか",
-      "action": ["PROPOSAL"],
+      "action": "PROPOSAL",
       "type": "PROPOSAL",
       "proposal": {
         "type": "HTTP_REQUEST",
@@ -222,7 +217,7 @@ export class Agent {
     出力フォーマット (JSONのみ):
     {
       "intent": "次に何をするかの理由 (日本語)。",
-      "action": ["実行するコマンド" または "行動の説明 (日本語)"],
+      "action": "行動を説明する日本語1語",
       "result": ["行動の結果の自己評価 (日本語)"],
       "next": ["次回やろうと考えていることの予定 (日本語)"],
       "type": "SHELL" or "FILE_WRITE" or "OBSERVE" or "PROPOSAL", 
@@ -258,9 +253,10 @@ export class Agent {
       const errorLog: ActionLog = {
         timestamp: "",
         intent: "LLMレスポンスのパース失敗",
-        action: ["LLM Response Parsing"],
+        action: "LLM Response Parsing",
         result: [`エラー: ${e.message}`, `Raw Response: ${responseRaw}`],
-        next: ["再試行"]
+        next: ["再試行"],
+        responseRaw
       };
       this.logger.log(errorLog);
 
@@ -290,7 +286,7 @@ export class Agent {
     if (plan.type === 'SHELL') {
       try {
         // 安全な読み取り専用コマンドのみ許可
-        const allowedCommands = ['ls', 'cat', 'date', 'pwd', 'whoami'];
+        const allowedCommands = ['ls', 'cat', 'date', 'pwd', 'whoami', 'curl'];
         const cmd = plan.action[0].split(' ')[0];
 
         if (allowedCommands.includes(cmd)) {
@@ -365,12 +361,14 @@ export class Agent {
     // create ActionLog 時に resultLog を使うように変更する。
 
     // 4. 記録 (Log)
+    const actionText = Array.isArray(plan.action) ? plan.action.join(' / ') : plan.action;
     const logEntry: ActionLog = {
       timestamp: "", // Logger will fill JST
       intent: plan.intent,
-      action: Array.isArray(plan.action) ? plan.action : [plan.action],
+      action: actionText || "",
       result: resultLog.length > 0 ? resultLog : (plan.result ? plan.result : ["実行結果なし"]),
-      next: plan.next ? (Array.isArray(plan.next) ? plan.next : [plan.next]) : ["次回ループで決定"]
+      next: plan.next ? (Array.isArray(plan.next) ? plan.next : [plan.next]) : ["次回ループで決定"],
+      responseRaw
     };
 
     this.logger.log(logEntry);
