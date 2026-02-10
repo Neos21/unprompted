@@ -40,7 +40,7 @@ export interface ActionLog {
   responseRaw?: string;  // AI の生の出力 (デバッグ用)
 }
 
-export type PlanType = 'SHELL' | 'FILE_WRITE' | 'PROPOSAL' | 'OBSERVE';
+export type PlanType = 'SHELL' | 'FILE_WRITE' | 'PROPOSAL';
 
 export interface PlanState {
   goal?: string;

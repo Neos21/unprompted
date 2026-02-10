@@ -56,7 +56,7 @@ export class Agent {
     // 1. 観測 (Observation)
     const recentLogs = this.logger.getRecentLogs(5); // 過去5回のログを取得
     const files = fs.readdirSync(process.cwd()); // 単純な観測
-    const allowedTypes = new Set(['SHELL', 'FILE_WRITE', 'PROPOSAL', 'OBSERVE']);
+    const allowedTypes = new Set(['SHELL', 'FILE_WRITE', 'PROPOSAL']);
     const allowedShellCommands = ['ls', 'cat', 'date', 'pwd', 'whoami', 'curl'];
 
     // MD ファイルの読み込み
@@ -164,8 +164,7 @@ export class Agent {
 
     // 2. 意図と行動の決定 (Decide Intent & Action)
     const context = `
-    あなたはサンドボックス環境にいる自律型 AI エージェントです。
-    あなたはコード生成と実行に強みを持っています。
+    あなたはサンドボックス環境で動作する自律型 AI エージェントです。コード生成に強みがあります。
     
     ${agentsMd}
     
@@ -176,126 +175,62 @@ export class Agent {
     # 現在の状態 (客観情報)
     
     - プロジェクトルートのファイル : ${files.join(', ')}
-    - **あなたが生成したファイル (\`outputs/\`)** : ${outputFiles.join(', ') || 'なし'}
-    - **永続状態 (\`outputs/state.yaml\`)** : ${stateSummary}
+    - outputs/ の生成物 : ${outputFiles.join(', ') || 'なし'}
+    - 永続状態 (outputs/state.yaml) : ${stateSummary}
     - 退屈度 (Boredom) : ${this.boredom}
     
-    **重要** : 以下の行動履歴は今回のセッション (起動からの履歴) のみです。
-    エージェント起動前の履歴は存在しません。「前回」「続き」などは今回のセッション内でのみ有効です。
-    
-    # 直近の行動履歴 (新しい順、今回セッションのみ) :
+    # 直近の行動履歴 (新しい順)
     
     ${recentLogs.map(log => {
       const actionStr = log.action || '';
       return `- [${log.timestamp}] Intent: ${log.intent} / Action: ${actionStr}`;
     }).join('\n    ')}${recentLogs.length === 0 ? '\n    (まだ行動履歴がありません。これが最初のループです)' : ''}
     
-    # 制約
+    # 制約 (最優先)
     
-    - **重要** : ファイルの作成・変更は \`outputs/\` ディレクトリ配下のみ許可されています
-    - プロジェクトルートや \`src/\` 等のシステムファイルは変更できません
-    - シェルコマンド (\`SHELL\`) は読み取り専用 (\`ls\`, \`cat\`, \`date\`, \`pwd\`, \`whoami\`) のみ許可されています
-    - ファイルへの書き込みは必ず \`type: "FILE_WRITE"\` を使用してください (\`echo ... > file\` はシェルでは禁止)
-    - **重要** : 以下の行動は「退屈」であり、推奨されません
-        - ランダムな数値や無意味な文字列の生成
-        - 単なるログの読み込み (\`ls\`, \`cat\`) の繰り返し
-    - 退屈度が高い場合、または直近で同じ行動をしている場合は **絶対に** 違う行動をしてください
+    - 変更・作成は outputs/ 配下のみ
+    - src/ などシステムファイルは変更不可
+    - SHELL で許可されるコマンド : ls, cat, date, pwd, whoami, curl
+    - リダイレクトやパイプは禁止
     
-    # **あなたの強み : コード生成と実行**
+    # できる行動
     
-    あなたはコーディングに特化した AI エージェントです。
+    - SHELL : 読み取りや状態確認 (例: ls, cat)
+    - FILE_WRITE : outputs/ 配下への作成・更新
+    - PROPOSAL : 実行や許可が必要な行動の提案
     
-    # 目的と推奨される行動
+    # 行動のルール
     
-    - **TypeScript で実用的なコードを生成** してください
-    - **生成したコードを実行** して結果を確認してください
-    - **ツールやユーティリティを作成** してください (データ処理、ファイル操作、API 連携など)
-    - **自己改善のためのコード** を書いてください (ログ解析、統計生成、自動化スクリプトなど)
-    - **既存のコードを改良** してください
+    - 既存ファイルを更新する前に必ず cat で内容を読む
+    - コード実行はこのシステムでは禁止。実行したい場合は PROPOSAL を出す
+    - action は日本語の作業概要を1行で書く (英単語・システム語は禁止)
+    - 観測は SHELL で行う (OBSERVE は使わない)
     
-    物語やエッセイなどの創作よりも、実用的なコードとツールの開発を優先してください。
-    既存の生成ファイル (${outputFiles.join(', ')}) がある場合、それを読み込んで改良または実行してください。
+    # 目標
     
-    # 更新の作法
+    - 実用的な TypeScript ツールやユーティリティを作る
+    - 既存コードがある場合は読み取り→改良を優先する
     
-    - 既存ファイルを変更する場合は、必ず内容を読み込んだ上で全体を再出力するか、追記なら \`appendMode: true\` を使ってください
-    - 同じターゲットへの連続上書きは避けてください
-    - 追記と上書きを混同しないように、\`appendMode\` を明示してください
+    # 提案の書き方
     
-    # 実行についての重要事項
+    - 提案は「何を承認してほしいか」が具体的に分かる内容にする
+    - CODE_EXECUTE の場合は targetFile と command を必ず含める
     
-    - このシステムは **コード実行を許可していません**。実行したと書かないでください
-    - 許可されている実行は読み取り専用の \`SHELL\` (ls/cat/date/pwd/whoami/curl) のみです
-    - 実行が必要な場合は **提案** として出力してください
-    - **承認待ちだけでループを終えないでください**。承認待ち中でも安全にできる作業 (読み取り・要約・設計・テスト案作成など) を続けてください
+    # 出力形式
     
-    # 行動の書き方 (重要)
+    - JSON 以外は出力しない
+    - コードブロックや説明文は禁止
+    - 使わないフィールドは省略してよい
     
-    - \`action\` には **日本語での作業概要** を1行で書いてください (例 : \`ログファイルを読み取り要約する\`)
-    - \`action\` に英単語や \`FILE_READ\` のようなシステム語は書かないでください
-    - 読み取りは \`SHELL\` の \`cat\` 等で行い、\`FILE_READ\` という行動は存在しません
-    - \`SHELL\` の場合は \`command\` に実際のコマンドを指定してください
-    - コマンドを実行したい場合は \`PROPOSAL\` を出してください (type: \`CODE_EXECUTE\`, targetFile: \`outputs/...\`)
-    
-    # 目標の立て方
-    
-    - 「退屈度を下げる」など内向きの目標は避け、具体的な成果物や検証を目的にしてください
-    
-    # **提案メカニズム**
-    
-    あなたは、現在許可されていない行動を「提案」することができます。
-    
-    ## 提案できる行動の例
-    
-    - Web サーバの起動 (\`type: "SERVER_START"\`) - 未実装
-    - npm パッケージのインストール (\`type: "INSTALL_PACKAGE"\`) - 無効化
-    - \`src/\` 配下のコード変更 (\`type: "SELF_MODIFY"\`) - 無効化
-    - 新しいシェルコマンドの許可 (\`type: "SHELL_COMMAND"\`) - 手動実装が必要
-    - その他の行動 (\`type: "OTHER"\`)
-    
-    ## 提案フォーマット
+    出力は次の JSON 形式に従うこと。
     
     {
-      "intent": "なぜこの提案をするのか",
-      "action": "PROPOSAL",
-      "type": "PROPOSAL",
-      "proposal": {
-        "type": "CODE_EXECUTE など",
-        "title": "提案のタイトル",
-        "reasoning": "提案する理由",
-        "details": "具体的に何を許可してほしいか (実行コマンドや対象ファイルを含める)",
-        "risks": ["セキュリティリスク", "データ流出の可能性"],
-        "benefits": ["実行結果の確認", "改善点の特定"],
-        "targetFile": "outputs/xxx.ts",
-        "command": "ts-node outputs/xxx.ts など"
-      },
-      "result": ["提案を作成しました"],
-      "next": ["人間の承認を待つ"]
-    }
-    
-    # 出力フォーマット : JSON のみ (この形式以外は不可)
-    
-    - **JSON 以外は絶対に出力しないでください**
-    - **コードブロック (\`\`\`json) を使わないでください**
-    - JSON の前後に説明文や空行を置かないでください
-    
-    {
-      "intent": "次に何をするかの理由 (日本語)",
+      "intent": "次に何をするかの理由",
       "action": "行動の概要を日本語1行で記述",
-      "result": ["行動の結果の自己評価 (日本語)"],
-      "next": ["次回やろうと考えていることの予定 (日本語)"],
-      "type": "SHELL" or "FILE_WRITE" or "OBSERVE" or "PROPOSAL",
-      "target": "ファイル名 (該当する場合・必ず \`outputs/\` で始まる)",
-      "content": "ファイルに書き込む内容 (書き込みの場合)",
-      "command": "SHELL の場合のみ、実行するコマンド (例: \"cat outputs/file.ts\")",
-      "appendMode": true or false,  // \`FILE_WRITE\` の場合、\`true\` = 追記、\`false\` = 上書き (省略時は \`false\`)
-      "state": {                    // 長期目標や進捗の更新がある場合のみ指定
-        "goal": "中長期的な目的 (日本語)",
-        "milestones": ["達成すべき小目標"],
-        "progress": "現在の進捗要約 (日本語)",
-        "nextFocus": "次に集中すること (日本語)",
-        "blockers": ["阻害要因"]
-      }
+      "result": ["行動の結果の自己評価"],
+      "next": ["次回やろうと考えていることの予定"],
+      "type": "SHELL",
+      "command": "ls -la"
     }
     `;
 
@@ -317,19 +252,20 @@ export class Agent {
     try {
       plan = parsePlan(responseRaw);
     } catch (error: any) {
-      console.error('LLMレスポンスのパースに失敗しました', error);
+      console.error('LLM レスポンスのパースに失敗しました', error);
       try {
         const strictPrompt = `
 以下の出力は JSON ではありません。**厳密な JSON のみ** を出力してください。
 説明文・コードブロック・余計な文字は一切禁止です。
 
 # 出力フォーマット
+
 {
   "intent": "...",
   "action": "...",
   "result": ["..."],
   "next": ["..."],
-  "type": "SHELL" or "FILE_WRITE" or "OBSERVE" or "PROPOSAL",
+  "type": "SHELL" or "FILE_WRITE" or "PROPOSAL",
   "target": "...",
   "content": "...",
   "command": "...",
@@ -338,6 +274,7 @@ export class Agent {
 }
 
 # 元の出力
+
 ${responseRaw}
         `.trim();
         const repairedRaw = await this.llm.chatOllama(strictPrompt, systemPrompt);
@@ -357,44 +294,6 @@ ${responseRaw}
         return;
       }
     }
-
-    const normalizePlan = (rawPlan: any): Plan | any => {
-      if (!rawPlan || typeof rawPlan !== 'object') return rawPlan;
-      if (rawPlan.type === 'CODE_EXECUTE') {
-        rawPlan.type = 'PROPOSAL';
-        rawPlan.proposal = rawPlan.proposal || {
-          type: 'CODE_EXECUTE',
-          title: 'コード実行の提案',
-          reasoning: rawPlan.intent || '生成したコードの実行が必要',
-          details: '承認後に実行して結果を確認する',
-          risks: ['想定外の挙動', '環境依存のエラー'],
-          benefits: ['実行結果の確認', '改善点の特定'],
-          targetFile: rawPlan.targetFile || rawPlan.target || ''
-        };
-      }
-      if (rawPlan.type === 'PROPOSAL' && !rawPlan.proposal) {
-        rawPlan.proposal = {
-          type: rawPlan.proposalType || 'OTHER',
-          title: rawPlan.intent || '提案',
-          reasoning: rawPlan.intent || '必要な許可を得るため',
-          details: rawPlan.details || '承認が必要な行動のため',
-          risks: ['安全性の検討が必要'],
-          benefits: ['次の行動が可能になる'],
-          targetFile: rawPlan.targetFile || rawPlan.target || ''
-        };
-      }
-      return rawPlan;
-    };
-
-    const isSystemActionLike = (text: string) => {
-      if (!text) return true;
-      if (/^[A-Z0-9_ ]+$/.test(text)) return true;
-      const upper = text.toUpperCase();
-      if (upper.includes('FILE_READ') || upper.includes('FILE_WRITE') || upper.includes('SHELL') || upper.includes('PROPOSAL') || upper.includes('OBSERVE') || upper.includes('CODE_EXECUTE')) {
-        return true;
-      }
-      return false;
-    };
 
     const validatePlan = (candidate: any): string[] => {
       const errors: string[] = [];
@@ -449,13 +348,30 @@ ${responseRaw}
             if (!p.command) {
               errors.push('CODE_EXECUTE の command がありません');
             }
+            if (p.targetFile) {
+              const resolved = path.resolve(process.cwd(), p.targetFile);
+              const outputsDir = path.resolve(process.cwd(), 'outputs');
+              if (!resolved.startsWith(outputsDir) || !fs.existsSync(resolved)) {
+                errors.push('CODE_EXECUTE の targetFile が存在しません');
+              }
+            }
+          }
+        }
+      }
+      if (candidate.type === 'FILE_WRITE' && candidate.target) {
+        const resolvedTarget = path.resolve(process.cwd(), candidate.target);
+        const outputsDir = path.resolve(process.cwd(), 'outputs');
+        if (resolvedTarget.startsWith(outputsDir) && fs.existsSync(resolvedTarget)) {
+          const needle = `cat ${candidate.target}`;
+          const readRecently = recentLogs.some(log => (log.responseRaw || '').includes(needle));
+          if (!readRecently) {
+            errors.push('既存ファイルを読み取らずに上書きしようとしています');
           }
         }
       }
       return errors;
     };
 
-    plan = normalizePlan(plan);
     let planErrors = validatePlan(plan);
     if (planErrors.length > 0) {
       try {
@@ -468,7 +384,7 @@ ${planErrors.map(e => `- ${e}`).join('\n')}
 
 # 制約
 
-- type は "SHELL" / "FILE_WRITE" / "PROPOSAL" / "OBSERVE" のいずれか
+- type は "SHELL" / "FILE_WRITE" / "PROPOSAL" のいずれか
 - action は日本語での作業概要 (英単語や FILE_READ などは禁止)
 - ファイル読み取りは SHELL の cat を使う (FILE_READ は存在しない)
 - コマンド実行は PROPOSAL (type: CODE_EXECUTE, targetFile: outputs/...) で提案する
@@ -480,7 +396,6 @@ ${responseRaw}
         `.trim();
         const repairedRaw = await this.llm.chatOllama(repairPrompt, systemPrompt);
         plan = parsePlan(repairedRaw);
-        plan = normalizePlan(plan);
         planErrors = validatePlan(plan);
         if (planErrors.length > 0) {
           throw new Error(`修正後も不正 : ${planErrors.join(' / ')}`);
@@ -517,23 +432,6 @@ ${responseRaw}
       } else {
         // `outputs/` 以外へのアクセスとしてマーク
         safeTarget = '';
-      }
-    }
-
-    const recentlyReadTarget = (target: string): boolean => {
-      const needle = `cat ${target}`;
-      return recentLogs.some(log => (log.responseRaw || '').includes(needle));
-    };
-
-    if (plan.type === 'FILE_WRITE' && plan.target && safeTarget && fs.existsSync(safeTarget)) {
-      if (!recentlyReadTarget(plan.target)) {
-        plan = {
-          type: 'SHELL',
-          intent: '既存ファイルを読み取り、内容を把握してから更新するため',
-          action: '対象ファイルを読み取り',
-          command: `cat ${plan.target}`,
-          next: ['内容を反映して改良または追記を検討する']
-        };
       }
     }
 
@@ -624,19 +522,7 @@ ${responseRaw}
     }
 
     // 4. 記録 (Log)
-    let actionText = Array.isArray(plan.action) ? plan.action.join(' / ') : plan.action;
-    if (!actionText || typeof actionText !== 'string' || isSystemActionLike(actionText)) {
-      if (plan.type === 'FILE_WRITE') {
-        actionText = plan.target ? `ファイル書き込み: ${plan.target}` : 'ファイル書き込み';
-      } else if (plan.type === 'SHELL') {
-        actionText = 'シェルでファイルを読み取り';
-      } else if (plan.type === 'PROPOSAL') {
-        const proposalTarget = plan.proposal?.targetFile || plan.targetFile || plan.target || '';
-        actionText = proposalTarget ? `実行提案の作成 : ${proposalTarget}` : '実行提案の作成';
-      } else {
-        actionText = '観測を実施';
-      }
-    }
+    const actionText = (Array.isArray(plan.action) ? plan.action.join(' / ') : plan.action) || '不明';
     const logEntry: ActionLog = {
       timestamp: '',  // Logger が JST を設定する
       intent: plan.intent,
